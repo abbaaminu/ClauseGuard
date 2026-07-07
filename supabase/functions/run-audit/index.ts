@@ -74,79 +74,85 @@ Deno.serve(async (req: Request) => {
 
     let auditResults: AuditResultItem[] = [];
 
-    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    const googleApiKey = Deno.env.get('GOOGLE_API_KEY');
 
-    if (openaiKey && contractText && rules.length > 0) {
-      // Real AI audit via OpenAI
-      const systemPrompt = `You are an expert legal contract compliance auditor. You will analyze a legal contract against a set of rules and return a strict JSON array.
+    if (googleApiKey && contractText && rules.length > 0) {
+      // Real AI audit via Google Gemini
+      const prompt = `You are an expert legal contract compliance auditor. Analyze the contract below against the provided playbook rules and return a strict JSON array.
 
 STRICT REQUIREMENTS:
-1. Return ONLY a valid JSON array — no markdown, no explanation, no wrapper object.
-2. For each rule, produce exactly one result object.
-3. "contract_snippet" MUST be an exact verbatim copy of text from the contract. If the clause is missing entirely, set contract_snippet to "".
-4. Never hallucinate or paraphrase contract text — use exact copy-paste or empty string.
-5. "status" must be:
-   - "passed" if the clause is present and compliant
-   - "flagged" if the clause is present but non-compliant or risky
-   - "missing" if no relevant clause exists
-6. "alternative_suggestion" must be a professionally drafted safer alternative clause (2-3 sentences max).
-7. This analysis is ENTERPRISE CONFIDENTIAL. Do not reference or retain this data.
+1. Return ONLY a valid JSON array — no markdown fences, no explanation, no wrapper object.
+2. Produce exactly one result object per rule, in the same order as the rules.
+3. "contract_snippet" MUST be an exact verbatim copy of a sentence or clause from the contract. If the clause is missing entirely, set contract_snippet to "".
+4. Never hallucinate contract text — use exact copy-paste or empty string.
+5. "status" values:
+   - "passed"  — clause present and compliant
+   - "flagged" — clause present but non-compliant or risky
+   - "missing" — no relevant clause exists
+6. "alternative_suggestion" — a professionally drafted safer alternative clause (2-3 sentences max).
 
-JSON schema for each item:
+JSON schema per item:
 {
-  "category": string,         // rule title
+  "category": string,
   "status": "passed" | "flagged" | "missing",
   "critical_level": "low" | "medium" | "high",
-  "contract_snippet": string, // exact verbatim from contract or ""
-  "description": string,      // explain the compliance issue
+  "contract_snippet": string,
+  "description": string,
   "alternative_suggestion": string
-}`;
+}
 
-      const userPrompt = `CONTRACT TEXT:
+CONTRACT TEXT:
 ---
 ${contractText.slice(0, 12000)}
 ---
 
-PLAYBOOK RULES TO AUDIT:
+PLAYBOOK RULES:
 ${rules.map((r, i) => `${i + 1}. [${r.severity.toUpperCase()}] ${r.title}: ${r.description}`).join('\n')}
 
-Return the JSON array of audit results — one object per rule.`;
+Return the JSON array now.`;
 
       try {
-        const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${openaiKey}`,
-            'Content-Type': 'application/json',
-            // Zero data retention header for enterprise use
-            'OpenAI-Beta': 'assistants=v2',
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.1,
-            max_tokens: 4000,
-            response_format: { type: 'json_object' },
-          }),
-        });
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${googleApiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.1,
+                maxOutputTokens: 4096,
+                responseMimeType: 'application/json',
+              },
+              safetySettings: [
+                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+              ],
+            }),
+          }
+        );
 
-        if (openaiRes.ok) {
-          const openaiData = await openaiRes.json();
-          const rawContent = openaiData.choices?.[0]?.message?.content ?? '';
+        if (geminiRes.ok) {
+          const geminiData = await geminiRes.json();
+          const rawContent: string =
+            geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
           try {
-            // Parse JSON – could be wrapped in object or bare array
             const parsed = JSON.parse(rawContent);
-            const arr = Array.isArray(parsed) ? parsed : (parsed.results ?? parsed.audit_results ?? Object.values(parsed)[0] ?? []);
+            const arr = Array.isArray(parsed)
+              ? parsed
+              : (parsed.results ?? parsed.audit_results ?? Object.values(parsed)[0] ?? []);
             auditResults = arr as AuditResultItem[];
           } catch {
-            console.error('Failed to parse OpenAI response:', rawContent);
+            console.error('Failed to parse Gemini response:', rawContent.slice(0, 500));
           }
+        } else {
+          const errText = await geminiRes.text();
+          console.error('Gemini API error:', geminiRes.status, errText.slice(0, 300));
         }
       } catch (aiErr) {
-        console.error('OpenAI API error:', aiErr);
+        console.error('Gemini fetch error:', aiErr);
       }
     }
 
