@@ -1,3 +1,11 @@
+# Secrets & local environment
+.env
+.env.*
+!.env.example
+
+# Internal platform files
+historical_context.txt
+
 # Logs
 logs
 *.log
@@ -30,3 +38,5 @@ package.json.[0-9]*
 .sync
 history/*.json
 .vite_cache
+/.skills
+/tasks
