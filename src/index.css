@@ -1,0 +1,164 @@
+/* stylelint-disable */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal design system – ClauseGuard */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&display=swap');
+
+@layer base {
+  :root {
+    /* Minimal light palette */
+    --background: 0 0% 100%;
+    --foreground: 220 14% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 14% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 14% 8%;
+
+    /* Primary: near-black for headings & CTAs */
+    --primary: 220 14% 10%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: very light gray surface */
+    --secondary: 220 13% 96%;
+    --secondary-foreground: 220 14% 20%;
+
+    /* Accent: slate-blue signal color */
+    --accent: 224 71% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --muted: 220 13% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 224 71% 40%;
+
+    --radius: 0.375rem;
+
+    /* Sidebar */
+    --sidebar-background: 220 13% 98%;
+    --sidebar-foreground: 220 14% 20%;
+    --sidebar-primary: 220 14% 10%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 13% 94%;
+    --sidebar-accent-foreground: 220 14% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 224 71% 40%;
+
+    /* Charts */
+    --chart-1: 224 71% 40%;
+    --chart-2: 160 55% 40%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 0 72% 51%;
+    --chart-5: 270 60% 55%;
+
+    /* Risk score colors (semantic, not Tailwind) */
+    --risk-low: 142 71% 38%;
+    --risk-medium: 38 92% 46%;
+    --risk-high: 0 72% 51%;
+
+    /* Scrollbar */
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .dark {
+    --background: 220 15% 10%;
+    --foreground: 220 13% 93%;
+    --card: 220 14% 13%;
+    --card-foreground: 220 13% 93%;
+    --popover: 220 14% 13%;
+    --popover-foreground: 220 13% 93%;
+
+    --primary: 220 13% 93%;
+    --primary-foreground: 220 14% 10%;
+
+    --secondary: 220 14% 18%;
+    --secondary-foreground: 220 13% 80%;
+
+    --accent: 224 71% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --muted: 220 14% 18%;
+    --muted-foreground: 220 9% 55%;
+
+    --destructive: 0 62% 42%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 14% 20%;
+    --input: 220 14% 20%;
+    --ring: 224 71% 55%;
+
+    --sidebar-background: 220 14% 8%;
+    --sidebar-foreground: 220 13% 80%;
+    --sidebar-primary: 220 13% 93%;
+    --sidebar-primary-foreground: 220 14% 10%;
+    --sidebar-accent: 220 14% 15%;
+    --sidebar-accent-foreground: 220 13% 93%;
+    --sidebar-border: 220 14% 16%;
+    --sidebar-ring: 224 71% 55%;
+
+    --chart-1: 224 71% 55%;
+    --chart-2: 160 55% 50%;
+    --chart-3: 38 92% 60%;
+    --chart-4: 0 72% 60%;
+    --chart-5: 270 60% 65%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: 'Montserrat', system-ui, sans-serif;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Montserrat', system-ui, sans-serif;
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Montserrat', system-ui, sans-serif;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+}
+
+/* Risk badge utility classes */
+@layer utilities {
+  .risk-low {
+    color: hsl(var(--risk-low));
+    background-color: hsl(var(--risk-low) / 0.08);
+    border-color: hsl(var(--risk-low) / 0.3);
+  }
+  .risk-medium {
+    color: hsl(var(--risk-medium));
+    background-color: hsl(var(--risk-medium) / 0.08);
+    border-color: hsl(var(--risk-medium) / 0.3);
+  }
+  .risk-high {
+    color: hsl(var(--risk-high));
+    background-color: hsl(var(--risk-high) / 0.08);
+    border-color: hsl(var(--risk-high) / 0.3);
+  }
+
+  .snippet-highlight {
+    background-color: hsl(var(--accent) / 0.12);
+    border-left: 2px solid hsl(var(--accent));
+    padding-left: 0.75rem;
+  }
+}
