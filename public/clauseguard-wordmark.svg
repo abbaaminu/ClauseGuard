@@ -1,0 +1,33 @@
+<svg width="420" height="120" viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shieldGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="accentGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Shield icon, scaled to fit 96x96 in the left column -->
+  <g transform="translate(12,12) scale(0.35)">
+    <path d="M128 16 L216 48 V116 C216 176 180 216 128 240 C76 216 40 176 40 116 V48 Z"
+          fill="url(#shieldGrad2)" stroke="#0B1220" stroke-width="2"/>
+    <path d="M128 30 L202 57 V116 C202 168 172 202 128 224 C84 202 54 168 54 116 V57 Z"
+          fill="none" stroke="#3B82F6" stroke-width="2" opacity="0.35"/>
+    <rect x="94" y="78" width="68" height="86" rx="6" fill="#F8FAFC"/>
+    <rect x="94" y="78" width="68" height="86" rx="6" fill="none" stroke="#CBD5E1" stroke-width="1.5"/>
+    <line x1="106" y1="98" x2="150" y2="98" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/>
+    <line x1="106" y1="112" x2="150" y2="112" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/>
+    <line x1="106" y1="126" x2="134" y2="126" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="150" cy="150" r="26" fill="url(#accentGrad2)" stroke="#0F172A" stroke-width="2"/>
+    <path d="M138 150 L147 159 L164 140" fill="none" stroke="#F8FAFC" stroke-width="6"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="108" y="58" font-family="'Segoe UI', Arial, sans-serif" font-size="34" font-weight="700" fill="#0F172A">Clause</text>
+  <text x="222" y="58" font-family="'Segoe UI', Arial, sans-serif" font-size="34" font-weight="700" fill="#2563EB">Guard</text>
+  <text x="108" y="82" font-family="'Segoe UI', Arial, sans-serif" font-size="13" font-weight="500" fill="#64748B" letter-spacing="1.5">CONTRACT RISK ANALYSIS</text>
+</svg>
