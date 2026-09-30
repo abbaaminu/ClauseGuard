@@ -80,53 +80,104 @@ export async function getContractById(id: string): Promise<Contract | null> {
   return data as Contract | null;
 }
 
+export type ContractStatusUpdate = Pick<Contract, 'id' | 'status' | 'risk_score'>;
+
+export function subscribeToContract(
+  contractId: string,
+  onUpdate: (update: ContractStatusUpdate) => void
+): () => void {
+  const channel = supabase
+    .channel(`contract-status:${contractId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'contracts',
+        filter: `id=eq.${contractId}`,
+      },
+      (payload) => onUpdate(payload.new as ContractStatusUpdate)
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
+}
+
 export async function uploadContract(
   file: File,
   playbookId: string | null,
-  userId: string
+  organizationId: string
 ): Promise<Contract> {
-  // 1. Upload file to storage
-  const fileName = `${userId}/${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
+  const fileContent = await extractTextFromFile(file);
+  if (!fileContent.trim()) {
+    throw new Error('Only plain-text .txt files can be analyzed until PDF/DOCX extraction is available.');
+  }
+
+  const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const storagePath = `${organizationId}/${crypto.randomUUID()}_${safeFileName}`;
   const { data: uploadData, error: uploadError } = await supabase.storage
     .from('contracts')
-    .upload(fileName, file, { contentType: file.type });
+    .upload(storagePath, file, { contentType: file.type });
   if (uploadError) throw uploadError;
 
-  const { data: urlData } = supabase.storage
-    .from('contracts')
-    .getPublicUrl(uploadData.path);
+  try {
+    const { data: contractData, error: insertError } = await supabase
+      .from('contracts')
+      .insert({
+        file_name: file.name,
+        file_url: uploadData.path,
+        file_content: fileContent,
+        organization_id: organizationId,
+        playbook_id: playbookId,
+        status: 'uploaded',
+      })
+      .select()
+      .maybeSingle();
 
-  // 2. Read file text content (for text-based files)
-  const fileContent = await extractTextFromFile(file);
+    if (insertError) throw insertError;
+    if (!contractData) throw new Error('Contract record was not created');
+    return contractData as Contract;
+  } catch (error) {
+    try {
+      const { error: cleanupError } = await supabase.storage
+        .from('contracts')
+        .remove([uploadData.path]);
+      if (cleanupError) console.error('Failed to remove orphaned contract upload:', cleanupError);
+    } catch (cleanupError) {
+      console.error('Failed to remove orphaned contract upload:', cleanupError);
+    }
+    throw error;
+  }
 
-  // 3. Insert contract record
-  const { data: contractData, error: insertError } = await supabase
-    .from('contracts')
-    .insert({
-      file_name: file.name,
-      file_url: urlData.publicUrl,
-      file_content: fileContent,
-      playbook_id: playbookId || null,
-      status: 'uploaded',
-    })
-    .select()
-    .maybeSingle();
-  if (insertError) throw insertError;
-
-  return contractData as Contract;
 }
 
 async function extractTextFromFile(file: File): Promise<string> {
-  if (file.type === 'text/plain') {
+  if (file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')) {
     return await file.text();
   }
-  // For PDF/DOCX, return filename as placeholder – actual extraction done server-side
-  return `[Contract: ${file.name}]\n\nFile uploaded for server-side text extraction and analysis.`;
+  return '';
 }
 
 export async function deleteContract(id: string): Promise<void> {
-  const { error } = await supabase.from('contracts').delete().eq('id', id);
-  if (error) throw error;
+  const { data: contract, error: lookupError } = await supabase
+    .from('contracts')
+    .select('file_url')
+    .eq('id', id)
+    .maybeSingle();
+  if (lookupError) throw lookupError;
+  if (!contract) return;
+
+  const { error: deleteError } = await supabase.from('contracts').delete().eq('id', id);
+  if (deleteError) throw deleteError;
+
+  if (contract.file_url && !/^https?:\/\//i.test(contract.file_url)) {
+    const { error: storageError } = await supabase.storage
+      .from('contracts')
+      .remove([contract.file_url]);
+    if (storageError) console.error('Failed to remove deleted contract file:', storageError);
+  }
 }
 
 // ─── Audit Results ────────────────────────────────────────────────────────────
@@ -145,18 +196,22 @@ export async function getAuditResults(contractId: string): Promise<AuditResult[]
 // ─── Dashboard Metrics ────────────────────────────────────────────────────────
 
 export async function getDashboardMetrics(): Promise<DashboardMetrics> {
-  const { data: completed } = await supabase
-    .from('contracts')
-    .select('risk_score')
-    .eq('status', 'completed');
+  const [completedResult, criticalResult] = await Promise.all([
+    supabase
+      .from('contracts')
+      .select('risk_score')
+      .eq('status', 'completed'),
+    supabase
+      .from('audit_results')
+      .select('id', { count: 'exact', head: true })
+      .eq('critical_level', 'high')
+      .in('status', ['flagged', 'missing']),
+  ]);
 
-  const { count: criticalCount } = await supabase
-    .from('audit_results')
-    .select('*', { count: 'exact', head: true })
-    .eq('critical_level', 'high')
-    .in('status', ['flagged', 'missing']);
+  if (completedResult.error) throw completedResult.error;
+  if (criticalResult.error) throw criticalResult.error;
 
-  const completedContracts = Array.isArray(completed) ? completed : [];
+  const completedContracts = completedResult.data ?? [];
   const totalAudited = completedContracts.length;
   const avgScore = totalAudited > 0
     ? Math.round(
@@ -167,7 +222,7 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
   return {
     totalAudited,
     averageRiskScore: avgScore,
-    criticalFlagsPending: criticalCount ?? 0,
+    criticalFlagsPending: criticalResult.count ?? 0,
   };
 }
 

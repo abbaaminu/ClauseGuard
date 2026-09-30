@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
-import path from 'node:path';
 
-// Core workflow: Upload -> Scan -> Review -> Export.
+// Core supported workflow: Upload -> Scan -> Review.
 // Requires E2E_TEST_USER_EMAIL / E2E_TEST_USER_PASSWORD for a seeded test
 // account (see docs/ROADMAP.md "Testing" section for the seed script).
 const TEST_EMAIL = process.env.E2E_TEST_USER_EMAIL ?? '';
@@ -18,31 +17,24 @@ test.describe('Contract review workflow', () => {
     await expect(page).toHaveURL(/dashboard/i);
   });
 
-  test('uploads a contract, runs an audit, reviews flags, and exports', async ({ page }) => {
-    await page.getByRole('link', { name: /upload|new contract/i }).click();
-
+  test('uploads a text contract and previews the stored document', async ({ page }) => {
     const fileInput = page.locator('input[type="file"]');
-    await fileInput.setInputFiles(path.join(__dirname, 'fixtures', 'sample-nda.docx'));
+    await fileInput.setInputFiles({
+      name: 'sample-contract.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('This fixture verifies the original uploaded contract text is shown.'),
+    });
 
-    await page.getByRole('button', { name: /select playbook/i }).click();
+    await page.getByRole('combobox').click();
     await page.getByRole('option', { name: /standard vendor nda guidelines/i }).click();
-    await page.getByRole('button', { name: /run audit|scan/i }).click();
+    await page.getByRole('button', { name: /upload & analyze/i }).click();
 
-    // Async pipeline — poll for completion rather than a fixed sleep.
-    await expect(page.getByText(/completed/i)).toBeVisible({ timeout: 60_000 });
+    const contractRow = page.getByRole('row', { name: /sample-contract\.txt/i });
+    await expect(contractRow).toBeVisible({ timeout: 60_000 });
+    await contractRow.click();
 
-    await expect(page.getByTestId('risk-score')).toBeVisible();
-    const flaggedRows = page.getByTestId('audit-result-row').filter({ hasText: /flagged|missing/i });
-    await expect(flaggedRows.first()).toBeVisible();
-
-    await flaggedRows.first().click();
-    await expect(page.getByTestId('clause-detail-panel')).toBeVisible();
-    await expect(page.getByTestId('original-document-pane')).toBeVisible();
-
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: /export|download redline/i }).click();
-    const download = await downloadPromise;
-    expect(download.suggestedFilename()).toMatch(/\.docx$/);
+    await expect(page.getByText('Document Preview')).toBeVisible();
+    await expect(page.getByText(/fixture verifies the original uploaded contract text/i)).toBeVisible();
   });
 
   test('is keyboard-navigable end to end (WCAG 2.1 AA)', async ({ page }) => {

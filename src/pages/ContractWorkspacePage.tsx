@@ -11,51 +11,8 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { RiskBadge, CriticalBadge, StatusBadge } from '@/components/contracts/Badges';
-import { getContractById, getAuditResults, runAudit } from '@/services/api';
+import { getContractById, getAuditResults, runAudit, subscribeToContract } from '@/services/api';
 import type { Contract, AuditResult } from '@/types/types';
-
-const MOCK_CONTRACT_TEXT = `SOFTWARE LICENSE AGREEMENT
-
-This Software License Agreement ("Agreement") is entered into as of January 1, 2024, between TechCorp Solutions Inc. ("Licensor") and Client Organization LLC ("Licensee").
-
-1. GRANT OF LICENSE
-Licensor hereby grants Licensee a non-exclusive, non-transferable, limited license to use the software product ("Software") solely for Licensee's internal business purposes.
-
-2. INDEMNIFICATION
-Licensee shall indemnify, defend, and hold harmless Licensor from any claims arising out of Licensee's use of the Software. Licensor shall have no obligation to indemnify Licensee under any circumstances whatsoever.
-
-3. LIMITATION OF LIABILITY
-IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES. THE TOTAL LIABILITY OF LICENSOR SHALL NOT EXCEED ONE HUNDRED DOLLARS ($100), REGARDLESS OF THE AMOUNT OF FEES PAID.
-
-4. GOVERNING LAW
-This Agreement shall be governed by the laws of the State of California, without regard to its conflict of law principles. Any disputes shall be resolved in the courts of San Francisco County, California.
-
-5. TERM AND TERMINATION
-This Agreement shall commence on the Effective Date and continue for a period of one (1) year. Either party may terminate this Agreement with ninety (90) days written notice.
-
-6. CONFIDENTIALITY
-Each party agrees to maintain the confidentiality of the other party's proprietary information. Confidential information shall mean any information designated as confidential in writing.
-
-7. INTELLECTUAL PROPERTY
-All intellectual property created by Licensor prior to or independent of this Agreement shall remain the sole property of Licensor.
-
-8. DATA PROCESSING
-The parties acknowledge that Licensor may process personal data on behalf of Licensee. Such processing shall be conducted in accordance with applicable law. No specific data processing agreement is attached hereto.
-
-9. ENTIRE AGREEMENT
-This Agreement constitutes the entire agreement between the parties concerning the subject matter hereof.
-
-IN WITNESS WHEREOF, the parties have executed this Agreement as of the date first written above.
-
-LICENSOR: TechCorp Solutions Inc.
-By: _____________________________
-Name: John Smith
-Title: Chief Executive Officer
-
-LICENSEE: Client Organization LLC
-By: _____________________________
-Name: Jane Doe
-Title: General Counsel`;
 
 export default function ContractWorkspacePage() {
   const { id } = useParams<{ id: string }>();
@@ -70,25 +27,79 @@ export default function ContractWorkspacePage() {
 
   const docViewerRef = useRef<HTMLDivElement>(null);
   const highlightRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const auditToastIdRef = useRef<string | number | null>(null);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    let latestUpdate: { id: string; status: Contract['status']; risk_score: Contract['risk_score'] } | null = null;
+    let currentStatus: Contract['status'] | null = null;
+
+    const refreshResults = async () => {
+      try {
+        const nextResults = await getAuditResults(id);
+        if (!cancelled) setResults(nextResults);
+      } catch {
+        if (!cancelled) toast.error('Failed to refresh audit results.');
+      }
+    };
+
+    const unsubscribe = subscribeToContract(id, (update) => {
+      const previousStatus = currentStatus;
+      latestUpdate = update;
+      currentStatus = update.status;
+      setContract((current) =>
+        current?.id === update.id ? { ...current, ...update } : current
+      );
+
+      if (update.status === 'processing' && previousStatus !== 'processing' && !auditToastIdRef.current) {
+        auditToastIdRef.current = toast.loading('Contract audit in progress...');
+      }
+      if (previousStatus === 'processing' && update.status === 'failed') {
+        toast.error('The contract audit failed.', { id: auditToastIdRef.current ?? undefined });
+        auditToastIdRef.current = null;
+      }
+      if (previousStatus === 'processing' && update.status === 'completed') {
+        toast.success('Contract audit completed.', { id: auditToastIdRef.current ?? undefined });
+        auditToastIdRef.current = null;
+      }
+      if (update.status === 'completed') void refreshResults();
+    });
+
     async function load() {
       try {
         const [c, r] = await Promise.all([
-          getContractById(id!),
-          getAuditResults(id!),
+          getContractById(id),
+          getAuditResults(id),
         ]);
-        setContract(c);
+        if (cancelled) return;
+        const refreshedContract = c && latestUpdate?.id === c.id
+          ? { ...c, ...latestUpdate }
+          : c;
+        currentStatus = refreshedContract?.status ?? null;
+        setContract(refreshedContract);
         setResults(r);
+        if (latestUpdate?.status === 'completed') void refreshResults();
       } catch {
-        toast.error('Failed to load contract.');
+        if (!cancelled) toast.error('Failed to load contract.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
     load();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [id]);
+
+  useEffect(() => () => {
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+  }, []);
 
   // Scroll document to highlighted snippet
   useEffect(() => {
@@ -102,25 +113,44 @@ export default function ContractWorkspacePage() {
   async function handleRerun() {
     if (!id) return;
     setIsRerunning(true);
+    const toastId = toast.loading('Starting contract audit...');
+    auditToastIdRef.current = toastId;
     try {
       await runAudit(id);
-      toast.success('Audit restarted. Refresh in a moment to see updated results.');
-    } catch (e) {
-      toast.error('Failed to trigger audit. Ensure your OpenAI API key is configured.');
+      const [updatedContract, updatedResults] = await Promise.all([
+        getContractById(id),
+        getAuditResults(id),
+      ]);
+      if (updatedContract) setContract(updatedContract);
+      setResults(updatedResults);
+      if (auditToastIdRef.current === toastId) {
+        toast.success('Contract audit completed.', { id: toastId });
+        auditToastIdRef.current = null;
+      }
+    } catch {
+      if (auditToastIdRef.current === toastId) {
+        toast.error('Audit could not be restarted. Check the document text, playbook, and AI configuration.', { id: toastId });
+        auditToastIdRef.current = null;
+      }
     } finally {
       setIsRerunning(false);
     }
   }
 
   async function copyToClipboard(text: string, resultId: string) {
-    await navigator.clipboard.writeText(text);
-    setCopiedId(resultId);
-    setTimeout(() => setCopiedId(null), 2000);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(resultId);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      toast.error('Could not copy text to the clipboard.');
+    }
   }
 
-  const contractText = contract?.file_content?.startsWith('[Contract:')
-    ? MOCK_CONTRACT_TEXT
-    : contract?.file_content || MOCK_CONTRACT_TEXT;
+  const storedContractText = contract?.file_content?.trim() ?? '';
+  const hasExtractedText = storedContractText.length > 0 && !storedContractText.startsWith('[Contract:');
+  const contractText = hasExtractedText ? storedContractText : '';
 
   // Categorize results
   const critical = results.filter(r => r.critical_level === 'high' && r.status !== 'passed');
@@ -264,8 +294,12 @@ export default function ContractWorkspacePage() {
                   <Loader2 className="h-6 w-6 animate-spin" />
                   <p className="text-sm">Audit in progress…</p>
                 </div>
-              ) : (
+              ) : hasExtractedText ? (
                 renderHighlightedDocument()
+              ) : (
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  Text extraction is unavailable for this document.
+                </p>
               )}
             </div>
           </div>

@@ -10,7 +10,7 @@
 -- both for SELECT and for write attempts.
 -- ============================================================================
 BEGIN;
-SELECT plan(13);
+SELECT plan(14);
 
 -- ---- Fixtures -----------------------------------------------------------
 INSERT INTO organizations (id, name) VALUES
@@ -123,6 +123,14 @@ SELECT throws_ok(
      VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'sneaky.pdf') $$,
   NULL, NULL,
   'Alice cannot insert a contract tagged with Org B''s organization_id'
+);
+
+SELECT throws_ok(
+  $$ INSERT INTO contracts (user_id, organization_id, file_name, playbook_id)
+     VALUES ('11111111-1111-1111-1111-111111111111', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+             'foreign-playbook.pdf', 'dddddddd-dddd-dddd-dddd-dddddddddddd') $$,
+  NULL, NULL,
+  'Alice cannot attach Org B''s playbook to an Org A contract'
 );
 
 -- ---- As Bob (Org B) ---------------------------------------------------

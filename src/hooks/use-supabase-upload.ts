@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type FileError, type FileRejection, useDropzone } from 'react-dropzone'
 import {type SupabaseClient} from '@supabase/supabase-js'
+import { toast } from 'sonner'
 
 interface FileWithPreview extends File {
   preview?: string
@@ -71,6 +72,22 @@ const useSupabaseUpload = (options: UseSupabaseUploadOptions) => {
   const [loading, setLoading] = useState<boolean>(false)
   const [errors, setErrors] = useState<{ name: string; message: string }[]>([])
   const [successes, setSuccesses] = useState<string[]>([])
+  const previewUrls = useRef(new Set<string>())
+
+  useEffect(() => () => {
+    previewUrls.current.forEach((preview) => URL.revokeObjectURL(preview))
+    previewUrls.current.clear()
+  }, [])
+
+  useEffect(() => {
+    const activePreviews = new Set(files.map((file) => file.preview))
+    previewUrls.current.forEach((preview) => {
+      if (!activePreviews.has(preview)) {
+        URL.revokeObjectURL(preview)
+        previewUrls.current.delete(preview)
+      }
+    })
+  }, [files])
 
   const isSuccess = useMemo(() => {
     if (errors.length === 0 && successes.length === 0) {
@@ -84,25 +101,22 @@ const useSupabaseUpload = (options: UseSupabaseUploadOptions) => {
 
   const onDrop = useCallback(
     (acceptedFiles: File[], fileRejections: FileRejection[]) => {
-      const validFiles = acceptedFiles
-        .filter((file) => !files.find((x) => x.name === file.name))
-        .map((file) => {
-          ;(file as FileWithPreview).preview = URL.createObjectURL(file)
-          ;(file as FileWithPreview).errors = []
-          return file as FileWithPreview
-        })
+      const createPreview = (file: File, fileErrors: readonly FileError[] = []) => {
+        const preview = URL.createObjectURL(file)
+        previewUrls.current.add(preview)
+        return Object.assign(file, { preview, errors: fileErrors })
+      }
+      const incomingFiles = [
+        ...acceptedFiles.map((file) => createPreview(file)),
+        ...fileRejections.map(({ file, errors }) => createPreview(file, errors)),
+      ]
 
-      const invalidFiles = fileRejections.map(({ file, errors }) => {
-        ;(file as FileWithPreview).preview = URL.createObjectURL(file)
-        ;(file as FileWithPreview).errors = errors
-        return file as FileWithPreview
+      setFiles((currentFiles) => {
+        const existingNames = new Set(currentFiles.map((file) => file.name))
+        return [...currentFiles, ...incomingFiles.filter((file) => !existingNames.has(file.name))]
       })
-
-      const newFiles = [...files, ...validFiles, ...invalidFiles]
-
-      setFiles(newFiles)
     },
-    [files, setFiles]
+    []
   )
 
   const dropzoneProps = useDropzone({
@@ -115,47 +129,52 @@ const useSupabaseUpload = (options: UseSupabaseUploadOptions) => {
   })
 
   const onUpload = useCallback(async () => {
+    const filesToUpload = files.filter((file) => !successes.includes(file.name))
+    if (filesToUpload.length === 0) return
+
+    const toastId = toast.loading(`Uploading ${filesToUpload.length} file${filesToUpload.length === 1 ? '' : 's'}...`)
     setLoading(true)
+    try {
+      const responses = await Promise.all(
+        filesToUpload.map(async (file) => {
+          try {
+            const { error } = await supabase.storage
+              .from(bucketName)
+              .upload(path ? `${path}/${file.name}` : file.name, file, {
+                cacheControl: cacheControl.toString(),
+                upsert,
+              })
+            return error
+              ? { name: file.name, message: error.message }
+              : { name: file.name, message: undefined }
+          } catch (error) {
+            return {
+              name: file.name,
+              message: error instanceof Error ? error.message : 'Unexpected upload error',
+            }
+          }
+        })
+      )
 
-    // [Joshen] This is to support handling partial successes
-    // If any files didn't upload for any reason, hitting "Upload" again will only upload the files that had errors
-    const filesWithErrors = errors.map((x) => x.name)
-    const filesToUpload =
-      filesWithErrors.length > 0
-        ? [
-            ...files.filter((f) => filesWithErrors.includes(f.name)),
-            ...files.filter((f) => !successes.includes(f.name)),
-          ]
-        : files
-
-    const responses = await Promise.all(
-      filesToUpload.map(async (file) => {
-        const { error } = await supabase.storage
-          .from(bucketName)
-          .upload(!!path ? `${path}/${file.name}` : file.name, file, {
-            cacheControl: cacheControl.toString(),
-            upsert,
-          })
-        if (error) {
-          return { name: file.name, message: error.message }
-        } else {
-          return { name: file.name, message: undefined }
-        }
-      })
-    )
-
-    const responseErrors = responses.filter((x) => x.message !== undefined)
-    // if there were errors previously, this function tried to upload the files again so we should clear/overwrite the existing errors.
-    setErrors(responseErrors)
-
-    const responseSuccesses = responses.filter((x) => x.message === undefined)
-    const newSuccesses = Array.from(
-      new Set([...successes, ...responseSuccesses.map((x) => x.name)])
-    )
-    setSuccesses(newSuccesses)
-
-    setLoading(false)
-  }, [files, path, bucketName, errors, successes])
+      setErrors(responses.filter((response) => response.message !== undefined))
+      setSuccesses((current) => Array.from(new Set([
+        ...current,
+        ...responses.filter((response) => response.message === undefined).map((response) => response.name),
+      ])))
+      const failureCount = responses.filter((response) => response.message !== undefined).length
+      const successCount = responses.length - failureCount
+      if (failureCount === 0) {
+        toast.success(`Uploaded ${successCount} file${successCount === 1 ? '' : 's'}.`, { id: toastId })
+      } else {
+        toast.error(`${failureCount} file${failureCount === 1 ? '' : 's'} failed to upload.`, { id: toastId })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected upload error'
+      toast.error(message, { id: toastId })
+    } finally {
+      setLoading(false)
+    }
+  }, [files, path, bucketName, cacheControl, upsert, supabase, successes])
 
   useEffect(() => {
     if (files.length === 0) {

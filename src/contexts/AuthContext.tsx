@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/db/supabase';
 import type { Profile } from '@/types/types';
+import { toast } from 'sonner';
 
 interface AuthContextType {
   user: User | null;
@@ -21,32 +22,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function fetchProfile(userId: string) {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-    setProfile(data as Profile | null);
-  }
-
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) fetchProfile(s.user.id);
-      setLoading(false);
+    let mounted = true;
+    let activeUserId: string | null = null;
+    let profileRequestId = 0;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      const nextUserId = nextSession?.user.id ?? null;
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+      if (nextUserId === activeUserId) return;
+
+      activeUserId = nextUserId;
+      const requestId = ++profileRequestId;
+      if (!nextUserId) {
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+
+      setProfile(null);
+      setLoading(true);
+      queueMicrotask(async () => {
+        try {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', nextUserId)
+            .maybeSingle();
+          if (error) throw error;
+          if (mounted && requestId === profileRequestId) setProfile(data as Profile | null);
+        } catch (error) {
+          if (mounted && requestId === profileRequestId) {
+            toast.error('Could not load your organization profile. Refresh and try again.');
+            setProfile(null);
+          }
+        } finally {
+          if (mounted && requestId === profileRequestId) setLoading(false);
+        }
+      });
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) fetchProfile(s.user.id);
-      else setProfile(null);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      profileRequestId += 1;
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function signIn(email: string, password: string) {
@@ -64,7 +85,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
   }
 
   return (

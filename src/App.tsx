@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import IntersectObserver from '@/components/common/IntersectObserver';
+import { AppErrorBoundary } from '@/components/common/AppErrorBoundary';
 import { Toaster } from '@/components/ui/sonner';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { RouteGuard } from '@/components/common/RouteGuard';
@@ -13,11 +14,13 @@ import AppLayout from '@/components/layouts/AppLayout';
 
 const App: React.FC = () => {
   return (
-    <Router>
-      <AuthProvider>
-        <RouteGuard>
-          <IntersectObserver />
-          <Routes>
+    <AppErrorBoundary>
+      <Router>
+        <AuthProvider>
+          <Toaster richColors position="top-right" />
+          <RouteGuard>
+            <IntersectObserver />
+            <Routes>
             {/* Public */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
@@ -30,11 +33,11 @@ const App: React.FC = () => {
             {/* Default */}
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-          <Toaster richColors position="top-right" />
-        </RouteGuard>
-      </AuthProvider>
-    </Router>
+            </Routes>
+          </RouteGuard>
+        </AuthProvider>
+      </Router>
+    </AppErrorBoundary>
   );
 };
 

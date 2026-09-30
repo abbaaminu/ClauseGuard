@@ -8,6 +8,7 @@ export interface Profile {
   id: string;
   email: string;
   organization_name: string;
+  organization_id: string;
   created_at: string;
 }
 
@@ -31,6 +32,7 @@ export interface Contract {
   id: string;
   user_id: string;
   file_name: string;
+  /** Object path in the private contracts storage bucket. */
   file_url: string;
   file_content: string;
   playbook_id: string | null;

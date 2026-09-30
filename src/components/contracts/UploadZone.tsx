@@ -23,8 +23,7 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'application/pdf': ['.pdf'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'text/plain': ['.txt'],
     },
     maxFiles: 1,
     disabled: uploading,
@@ -80,7 +79,7 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
               <p className="text-sm">
                 {isDragActive ? 'Drop your contract here' : 'Drag & drop a contract, or click to browse'}
               </p>
-              <p className="text-xs mt-1">Supports PDF and DOCX</p>
+              <p className="text-xs mt-1">Plain-text .txt files only. PDF/DOCX extraction is not available yet.</p>
             </div>
           </div>
         )}

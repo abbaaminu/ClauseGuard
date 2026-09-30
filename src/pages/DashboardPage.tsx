@@ -24,7 +24,7 @@ import type { Contract, Playbook, DashboardMetrics } from '@/types/types';
 const PAGE_SIZE = 10;
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -50,8 +50,8 @@ export default function DashboardPage() {
       setContracts(contractsRes.data);
       setTotalCount(contractsRes.count);
       setMetrics(met);
-    } catch (err) {
-      console.error('Failed to fetch dashboard data:', err);
+    } catch {
+      toast.error('Failed to load dashboard data. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -72,21 +72,23 @@ export default function DashboardPage() {
   }, [contracts, fetchData]);
 
   async function handleUpload(file: File, playbookId: string | null) {
-    if (!user) return;
+    if (!user || !profile?.organization_id) {
+      toast.error('Your organization profile is unavailable. Please refresh and try again.');
+      return;
+    }
     setUploading(true);
     try {
-      const contract = await uploadContract(file, playbookId, user.id);
+      const contract = await uploadContract(file, playbookId, profile.organization_id);
       toast.success(`"${file.name}" uploaded. Starting audit…`);
       // Trigger audit
       try {
         await runAudit(contract.id);
-      } catch (auditErr) {
-        console.warn('Audit trigger error (will retry via polling):', auditErr);
+      } catch {
+        toast.error('Contract uploaded, but auditing failed. Check the document text, playbook, and AI configuration.');
       }
       await fetchData();
     } catch (err) {
-      toast.error('Upload failed. Please try again.');
-      console.error(err);
+      toast.error(err instanceof Error ? err.message : 'Upload failed. Please try again.');
     } finally {
       setUploading(false);
     }

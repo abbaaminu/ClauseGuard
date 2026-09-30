@@ -1,2 +1,5 @@
 [auth.email]
 enable_confirmations = false
+
+[functions.run-audit]
+verify_jwt = true

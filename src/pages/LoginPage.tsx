@@ -29,13 +29,20 @@ export default function LoginPage() {
 
   async function onSubmit(values: FormValues) {
     setLoading(true);
-    const { error } = await signIn(values.email, values.password);
-    setLoading(false);
-    if (error) {
-      toast.error(error.message || 'Sign-in failed. Please try again.');
-      return;
+    const toastId = toast.loading('Signing in...');
+    try {
+      const { error } = await signIn(values.email, values.password);
+      if (error) {
+        toast.error(error.message || 'Sign-in failed. Please try again.', { id: toastId });
+        return;
+      }
+      toast.success('Signed in successfully.', { id: toastId });
+      navigate('/dashboard');
+    } catch {
+      toast.error('Sign-in failed. Check your connection and try again.', { id: toastId });
+    } finally {
+      setLoading(false);
     }
-    navigate('/dashboard');
   }
 
   return (

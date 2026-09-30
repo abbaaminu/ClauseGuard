@@ -11,6 +11,7 @@ import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/hooks/useTheme';
+import { toast } from 'sonner';
 
 interface NavItem {
   label: string;
@@ -28,9 +29,15 @@ function SidebarNav({ onClose }: { onClose?: () => void }) {
   const navigate = useNavigate();
 
   async function handleSignOut() {
-    await signOut();
-    navigate('/login');
-    onClose?.();
+    const toastId = toast.loading('Signing out...');
+    try {
+      await signOut();
+      toast.success('Signed out.', { id: toastId });
+      navigate('/login');
+      onClose?.();
+    } catch {
+      toast.error('Sign-out failed. Please try again.', { id: toastId });
+    }
   }
 
   const initials = profile?.email

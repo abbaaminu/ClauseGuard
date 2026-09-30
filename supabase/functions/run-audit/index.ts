@@ -19,6 +19,12 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
+  if (req.method !== 'POST') {
+    return new Response(
+      JSON.stringify({ error: 'Method not allowed' }),
+      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
 
   let env;
   try {
@@ -32,48 +38,97 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  let serviceClient: ReturnType<typeof createClient> | null = null;
+  let authorizedContractId: string | null = null;
+
   try {
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    const bearerToken = req.headers.get('Authorization')?.match(/^Bearer\s+(\S+)$/i)?.[1];
+    if (!bearerToken) {
       return new Response(
-        JSON.stringify({ error: 'Missing authorization header' }),
+        JSON.stringify({ error: 'Valid bearer authorization is required' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-
-    const { contract_id } = await req.json();
-    if (!contract_id) {
+    const userClient = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${bearerToken}` } },
+    });
+    const { data: { user }, error: authError } = await userClient.auth.getUser();
+    if (authError || !user) {
       return new Response(
-        JSON.stringify({ error: 'contract_id is required' }),
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const requestBody: unknown = await req.json().catch(() => null);
+    const contractId =
+      typeof requestBody === 'object' && requestBody !== null && 'contract_id' in requestBody
+        ? requestBody.contract_id
+        : null;
+    if (typeof contractId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(contractId)) {
+      return new Response(
+        JSON.stringify({ error: 'A valid contract_id is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Fetch contract. RLS on the underlying tables still applies to
-    // interactive user sessions; this service-role client is scoped by the
-    // explicit .eq('id', contract_id) plus the multi-tenant trigger on
-    // audit_results (see migration 00002) so results can never be written
-    // against a different tenant's contract.
-    const { data: contract, error: contractError } = await supabase
+    const { data: visibleContract, error: accessError } = await userClient
+      .from('contracts')
+      .select('id')
+      .eq('id', contractId)
+      .maybeSingle();
+    if (accessError) throw accessError;
+    if (!visibleContract) {
+      return new Response(
+        JSON.stringify({ error: 'Contract not found' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    authorizedContractId = contractId;
+
+    serviceClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    const { data: contract, error: contractError } = await serviceClient
       .from('contracts')
       .select('*, playbook:playbook_id(id, name, rules_json)')
-      .eq('id', contract_id)
+      .eq('id', contractId)
       .maybeSingle();
-
-    if (contractError || !contract) {
+    if (contractError) throw contractError;
+    if (!contract) {
       return new Response(
         JSON.stringify({ error: 'Contract not found' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    await supabase.from('contracts').update({ status: 'processing' }).eq('id', contract_id);
-
-    const rawContractText = contract.file_content || '';
+    const rawContractText = contract.file_content?.trim() ?? '';
     const playbook = contract.playbook as { id: string; name: string; rules_json: PlaybookRule[] } | null;
     const rules: PlaybookRule[] = playbook?.rules_json ?? [];
+    if (!rawContractText || rawContractText.startsWith('[Contract:')) {
+      throw new Error('Contract text extraction is unavailable');
+    }
+    if (rules.length === 0) {
+      throw new Error('An audit requires at least one playbook rule');
+    }
+    if (!env.GOOGLE_API_KEY && !env.ALLOW_MOCK_AUDITS) {
+      throw new Error('No AI provider is configured');
+    }
+
+    const { data: claimedContract, error: processingError } = await serviceClient
+      .from('contracts')
+      .update({ status: 'processing' })
+      .eq('id', contractId)
+      .in('status', ['uploaded', 'failed', 'completed'])
+      .select('id')
+      .maybeSingle();
+    if (processingError) throw processingError;
+    if (!claimedContract) {
+      return new Response(
+        JSON.stringify({ error: 'This contract is already being audited' }),
+        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     // --- PII redaction pass (before ANYTHING leaves our infra) -----------
     const { redactedText: contractText, mapping } = env.REDACT_PII_BEFORE_LLM
@@ -110,6 +165,9 @@ Deno.serve(async (req: Request) => {
 
     // Fallback: deterministic mock audit when no AI key or empty/invalid result
     if (auditResults.length === 0) {
+      if (!env.ALLOW_MOCK_AUDITS) {
+        throw new Error('The AI provider did not return a valid audit');
+      }
       auditResults = generateMockAuditResults(contractText, rules);
       usedModel = usedModel ?? 'mock';
     }
@@ -119,7 +177,7 @@ Deno.serve(async (req: Request) => {
     const unredacted = auditResults.map((r) => unredactAuditItem(r, mapping));
 
     const validated = unredacted.map((r) => ({
-      contract_id,
+      contract_id: contractId,
       category: String(r.category || 'General'),
       status: r.status,
       critical_level: r.critical_level,
@@ -128,17 +186,23 @@ Deno.serve(async (req: Request) => {
       description: r.description,
     }));
 
-    await supabase.from('audit_results').delete().eq('contract_id', contract_id);
+    const { error: deleteError } = await serviceClient
+      .from('audit_results')
+      .delete()
+      .eq('contract_id', contractId);
+    if (deleteError) throw deleteError;
     if (validated.length > 0) {
-      await supabase.from('audit_results').insert(validated);
+      const { error: insertError } = await serviceClient.from('audit_results').insert(validated);
+      if (insertError) throw insertError;
     }
 
     const riskScore = calculateRiskScore(validated);
 
-    await supabase
+    const { error: completionError } = await serviceClient
       .from('contracts')
       .update({ status: 'completed', risk_score: riskScore })
-      .eq('id', contract_id);
+      .eq('id', contractId);
+    if (completionError) throw completionError;
 
     return new Response(
       JSON.stringify({ success: true, results_count: validated.length, risk_score: riskScore, model: usedModel }),
@@ -146,8 +210,15 @@ Deno.serve(async (req: Request) => {
     );
   } catch (err) {
     console.error('run-audit error:', err);
+    if (serviceClient && authorizedContractId) {
+      const { error: recoveryError } = await serviceClient
+        .from('contracts')
+        .update({ status: 'failed' })
+        .eq('id', authorizedContractId);
+      if (recoveryError) console.error('Failed to mark contract audit as failed:', recoveryError);
+    }
     return new Response(
-      JSON.stringify({ error: 'Internal server error', detail: String(err) }),
+      JSON.stringify({ error: 'Internal server error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
@@ -162,10 +233,10 @@ async function callGemini(
   const prompt = buildPrompt(contractText, rules);
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {

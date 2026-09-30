@@ -19,8 +19,7 @@ code.
 | Model cascade | Fast model (`gemini-1.5-flash`) for the first pass; `gemini-1.5-pro` only re-verifies `flagged`+`high` items | `supabase/functions/run-audit/index.ts` |
 | Env validation | Zod-validated env on both frontend boot and every edge function invocation — fails loud instead of `undefined` propagating | `src/lib/env.ts`, `supabase/functions/_shared/env.ts` |
 | OOXML redlining | Real `<w:ins>`/`<w:del>` injection into `document.xml` via JSZip + DOMParser — genuine Word Track Changes, not a visual approximation | `src/lib/docx-redline.ts` |
-| CI | GitHub Actions: lint/build, pgTAP RLS suite against a local Supabase stack, Playwright | `.github/workflows/ci.yml` |
-| E2E scaffold | Upload → Scan → Review → Export spec + keyboard-nav smoke test | `e2e/upload-scan-review-export.spec.ts` |
+| E2E scaffold | Credential-gated upload, document preview, and keyboard-navigation tests; these are not currently run by a CI workflow | `e2e/upload-scan-review-export.spec.ts` |
 
 ---
 
@@ -49,10 +48,10 @@ code.
 
 ## Phase 2: document processing engine
 
-1. **Layout-aware parsing + OCR.** Today `contracts.file_content` is
-   populated by whatever the frontend extracts client-side — fine for
-   clean, text-native PDFs, but it will silently produce garbage on
-   scanned/image contracts. Recommended pipeline:
+1. **Layout-aware parsing + OCR.** Currently only `text/plain` uploads are
+   extracted. PDF and DOCX uploads have no parser, so audits now fail rather
+   than claiming to analyze placeholder text. This is a release blocker for
+   those formats. Recommended pipeline:
    - **Unstructured.io** (open-source, self-hostable, or hosted API) for
      layout-aware extraction of paragraphs/tables/headers from PDF & DOCX.
    - **AWS Textract** specifically for scanned/low-quality PDFs needing

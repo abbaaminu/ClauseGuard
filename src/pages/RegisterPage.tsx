@@ -34,14 +34,20 @@ export default function RegisterPage() {
 
   async function onSubmit(values: FormValues) {
     setLoading(true);
-    const { error } = await signUp(values.email, values.password, values.organization_name);
-    setLoading(false);
-    if (error) {
-      toast.error(error.message || 'Registration failed. Please try again.');
-      return;
+    const toastId = toast.loading('Creating your account...');
+    try {
+      const { error } = await signUp(values.email, values.password, values.organization_name);
+      if (error) {
+        toast.error(error.message || 'Registration failed. Please try again.', { id: toastId });
+        return;
+      }
+      toast.success('Account created. Check your email to verify it.', { id: toastId });
+      navigate('/login');
+    } catch {
+      toast.error('Registration failed. Check your connection and try again.', { id: toastId });
+    } finally {
+      setLoading(false);
     }
-    toast.success('Account created! Please check your email to verify your account.');
-    navigate('/login');
   }
 
   return (
