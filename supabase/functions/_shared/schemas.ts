@@ -69,7 +69,7 @@ export function parseAuditResponse(
 // highest-stakes findings a second, higher-quality opinion.
 // ---------------------------------------------------------------------------
 export const FAST_MODEL = 'gemini-3.8-flash';
-export const ESCALATION_MODEL = 'gemini-3.8-pro';
+export const ESCALATION_MODEL = 'gemini-3.8-flash';
 
 export function needsEscalation(item: AuditResultItem): boolean {
   return item.status !== "passed" && item.critical_level === "high";
