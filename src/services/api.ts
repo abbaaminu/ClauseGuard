@@ -57,7 +57,7 @@ export async function getContracts(
 
   const { data, error, count } = await supabase
     .from('contracts')
-    .select('*, playbook:playbook_id(id, name)', { count: 'exact' })
+    .select('*, playbook:playbooks!contracts_playbook_id_fkey(id, name)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(from, to);
 
@@ -73,7 +73,7 @@ export async function getContracts(
 export async function getContractById(id: string): Promise<Contract | null> {
   const { data, error } = await supabase
     .from('contracts')
-    .select('*, playbook:playbook_id(id, name)')
+    .select('*, playbook:playbooks!contracts_playbook_id_fkey(id, name)')
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;

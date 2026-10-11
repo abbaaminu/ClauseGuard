@@ -13,14 +13,16 @@ const EnvSchema = z.object({
   GOOGLE_API_KEY_ESCALATION: z.string().min(10).optional(),
   ALLOW_MOCK_AUDITS: z
     .string()
+    .pipe(z.enum(["true", "false"]))
     .default("false")
-    .transform((v: string) => v.toLowerCase() === "true"),
+    .transform((v) => v === "true"),
   // Toggle for the PII redaction pass — should be "true" in every
   // environment that isn't a local/dev sandbox with synthetic data.
   REDACT_PII_BEFORE_LLM: z
     .string()
+    .pipe(z.enum(["true", "false"]))
     .default("true")
-    .transform((v: string) => v.toLowerCase() !== "false"),
+    .transform((v) => v === "true"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -41,7 +43,7 @@ export function loadEnv(): Env {
   const parsed = EnvSchema.safeParse(raw);
   if (!parsed.success) {
     // Never leak secret *values* in the error — only which keys are missing/invalid.
-    const issues = parsed.error.issues.map((i: { path: Array<string | number> }) => i.path.join(".")).join(", ");
+    const issues = parsed.error.issues.map((i) => i.path.join(".")).join(", ");
     throw new Error(`Invalid/missing environment variables: ${issues}`);
   }
   cached = parsed.data;

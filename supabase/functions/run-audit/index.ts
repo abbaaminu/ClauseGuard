@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { loadEnv } from '../_shared/env.ts';
 import { redactPii, unredactAuditItem } from '../_shared/redact.ts';
 import {
@@ -11,6 +12,88 @@ import {
   parseAuditResponse,
 } from '../_shared/schemas.ts';
 
+type RunAuditJson =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: RunAuditJson | undefined }
+  | RunAuditJson[];
+
+type RunAuditDatabase = {
+  public: {
+    Tables: {
+      contracts: {
+        Row: {
+          id: string;
+          user_id: string;
+          organization_id: string;
+          file_name: string;
+          file_url: string;
+          file_content: string;
+          playbook_id: string | null;
+          status: 'uploaded' | 'processing' | 'completed' | 'failed';
+          risk_score: number | null;
+          created_at: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [{
+          foreignKeyName: 'contracts_playbook_id_fkey';
+          columns: ['playbook_id'];
+          isOneToOne: false;
+          referencedRelation: 'playbooks';
+          referencedColumns: ['id'];
+        }];
+      };
+      playbooks: {
+        Row: {
+          id: string;
+          name: string;
+          rules_json: RunAuditJson;
+          user_id: string | null;
+          organization_id: string | null;
+          is_system: boolean;
+          created_at: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+      audit_results: {
+        Row: {
+          id: string;
+          contract_id: string;
+          category: string;
+          status: 'passed' | 'flagged' | 'missing';
+          critical_level: 'low' | 'medium' | 'high';
+          contract_snippet: string;
+          alternative_suggestion: string;
+          description: string;
+          created_at: string;
+          organization_id: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
+    };
+    Views: Record<string, never>;
+    Functions: {
+      complete_contract_audit: {
+        Args: { p_contract_id: string; p_results: RunAuditJson; p_risk_score: number };
+        Returns: undefined;
+      };
+    };
+    Enums: {
+      contract_status: 'uploaded' | 'processing' | 'completed' | 'failed';
+      audit_status: 'passed' | 'flagged' | 'missing';
+      critical_level: 'low' | 'medium' | 'high';
+    };
+    CompositeTypes: Record<string, never>;
+  };
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -18,8 +101,10 @@ const corsHeaders = {
   'Access-Control-Max-Age': '86400',
 } as const;
 
+const MAX_CONTRACT_TEXT_CHARS = 100_000;
+
 class AuditInputError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly status: 413 | 422 = 422) {
     super(message);
     this.name = 'AuditInputError';
   }
@@ -55,8 +140,9 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  let serviceClient: ReturnType<typeof createClient> | null = null;
+  let serviceClient: SupabaseClient<RunAuditDatabase> | null = null;
   let authorizedContractId: string | null = null;
+  let contractClaimed = false;
 
   try {
     const bearerToken = req.headers.get('Authorization')?.match(/^Bearer\s+(\S+)$/i)?.[1];
@@ -67,7 +153,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const userClient = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+    const userClient = createClient<RunAuditDatabase>(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
       auth: { autoRefreshToken: false, persistSession: false },
       global: { headers: { Authorization: `Bearer ${bearerToken}` } },
     });
@@ -105,10 +191,11 @@ Deno.serve(async (req: Request) => {
     }
     authorizedContractId = contractId;
 
-    serviceClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-    const { data: contract, error: contractError } = await serviceClient
+    const adminClient = createClient<RunAuditDatabase>(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    serviceClient = adminClient;
+    const { data: contract, error: contractError } = await adminClient
       .from('contracts')
-      .select('*, playbook:playbook_id(id, name, rules_json)')
+      .select('*, playbook:playbooks!contracts_playbook_id_fkey(id, name, rules_json)')
       .eq('id', contractId)
       .maybeSingle();
     if (contractError) throw contractError;
@@ -127,10 +214,19 @@ Deno.serve(async (req: Request) => {
     if (!rawContractText || rawContractText.startsWith('[Contract:')) {
       throw new AuditInputError('Contract text is unavailable for auditing.');
     }
+    if (rawContractText.length > MAX_CONTRACT_TEXT_CHARS) {
+      throw new AuditInputError(
+        `Contract text exceeds the ${MAX_CONTRACT_TEXT_CHARS.toLocaleString()}-character audit limit.`,
+        413
+      );
+    }
     if (!parsedRules.success) {
       throw new AuditInputError('The selected playbook has no valid audit rules.');
     }
     const rules: PlaybookRule[] = parsedRules.data;
+    if (new Set(rules.map((rule) => rule.title)).size !== rules.length) {
+      throw new AuditInputError('The selected playbook contains duplicate rule titles.');
+    }
     if (!env.GOOGLE_API_KEY && !env.ALLOW_MOCK_AUDITS) {
       throw new AiProviderError(
         'AI auditing is not configured. Set the GOOGLE_API_KEY secret for this Supabase project.',
@@ -138,7 +234,19 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const { data: claimedContract, error: processingError } = await serviceClient
+    // Redact before claiming the contract, so invalid input never leaves a stale
+    // processing state and unredacted text is never included in an outbound request.
+    const { redactedText: contractText, mapping } = env.REDACT_PII_BEFORE_LLM
+      ? redactPii(rawContractText)
+      : { redactedText: rawContractText, mapping: new Map<string, string>() };
+    if (contractText.length > MAX_CONTRACT_TEXT_CHARS) {
+      throw new AuditInputError(
+        `Redacted contract text exceeds the ${MAX_CONTRACT_TEXT_CHARS.toLocaleString()}-character audit limit.`,
+        413
+      );
+    }
+
+    const { data: claimedContract, error: processingError } = await adminClient
       .from('contracts')
       .update({ status: 'processing' })
       .eq('id', contractId)
@@ -152,11 +260,7 @@ Deno.serve(async (req: Request) => {
         { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-
-    // --- PII redaction pass (before ANYTHING leaves our infra) -----------
-    const { redactedText: contractText, mapping } = env.REDACT_PII_BEFORE_LLM
-      ? redactPii(rawContractText)
-      : { redactedText: rawContractText, mapping: new Map<string, string>() };
+    contractClaimed = true;
 
     let auditResults: AuditResultItem[] = [];
     let usedModel: string | null = null;
@@ -215,22 +319,19 @@ Deno.serve(async (req: Request) => {
       description: r.description,
     }));
 
-    const { error: deleteError } = await serviceClient
-      .from('audit_results')
-      .delete()
-      .eq('contract_id', contractId);
-    if (deleteError) throw deleteError;
-    if (validated.length > 0) {
-      const { error: insertError } = await serviceClient.from('audit_results').insert(validated);
-      if (insertError) throw insertError;
-    }
-
     const riskScore = calculateRiskScore(validated);
-
-    const { error: completionError } = await serviceClient
-      .from('contracts')
-      .update({ status: 'completed', risk_score: riskScore })
-      .eq('id', contractId);
+    const { error: completionError } = await adminClient.rpc('complete_contract_audit', {
+      p_contract_id: contractId,
+      p_results: validated.map(({ category, status, critical_level, contract_snippet, alternative_suggestion, description }) => ({
+        category,
+        status,
+        critical_level,
+        contract_snippet,
+        alternative_suggestion,
+        description,
+      })),
+      p_risk_score: riskScore,
+    });
     if (completionError) throw completionError;
 
     return new Response(
@@ -239,12 +340,13 @@ Deno.serve(async (req: Request) => {
     );
   } catch (err) {
     console.error('run-audit error:', err);
-    if (serviceClient && authorizedContractId) {
+    if (serviceClient && authorizedContractId && contractClaimed) {
       try {
         const { error: recoveryError } = await serviceClient
           .from('contracts')
           .update({ status: 'failed' })
-          .eq('id', authorizedContractId);
+          .eq('id', authorizedContractId)
+          .eq('status', 'processing');
         if (recoveryError) console.error('Failed to mark contract audit as failed:', recoveryError);
       } catch (recoveryError) {
         console.error('Failed to mark contract audit as failed:', recoveryError);
@@ -257,7 +359,7 @@ Deno.serve(async (req: Request) => {
           : 'Internal server error',
       }),
       {
-        status: err instanceof AuditInputError ? 422
+        status: err instanceof AuditInputError ? err.status
           : err instanceof AiProviderError ? err.status
           : 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -279,6 +381,7 @@ async function callGemini(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        signal: AbortSignal.timeout(45_000),
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
@@ -310,14 +413,28 @@ async function callGemini(
       };
     }
     const result = parseAuditResponse(rawContent);
-    return result.ok
-      ? result
-      : { ok: false, error: `Gemini ${model} returned an unusable audit response: ${result.error}.` };
+    if (!result.ok) {
+      return { ok: false, error: `Gemini ${model} returned an unusable audit response: ${result.error}.` };
+    }
+    if (result.data.length !== rules.length) {
+      return { ok: false, error: `Gemini ${model} returned ${result.data.length} results for ${rules.length} playbook rules.` };
+    }
+    for (const [index, item] of result.data.entries()) {
+      if (item.category !== rules[index].title) {
+        return { ok: false, error: `Gemini ${model} returned results in an invalid order or with an unexpected category.` };
+      }
+      if (item.contract_snippet && !contractText.includes(item.contract_snippet)) {
+        return { ok: false, error: `Gemini ${model} returned a contract snippet that was not copied verbatim from the supplied text.` };
+      }
+    }
+    return result;
   } catch (err) {
     console.error(`Gemini ${model} request failed:`, err);
     return {
       ok: false,
-      error: `Could not reach Gemini ${model} or read its response. Check provider availability and try again.`,
+      error: err instanceof DOMException && err.name === 'TimeoutError'
+        ? `Gemini ${model} did not respond within 45 seconds. Try again later.`
+        : `Could not reach Gemini ${model} or read its response. Check provider availability and try again.`,
     };
   }
 }
@@ -400,7 +517,7 @@ JSON schema per item:
 
 CONTRACT TEXT:
 ---
-${contractText.slice(0, 12000)}
+${contractText}
 ---
 
 PLAYBOOK RULES:

@@ -4,21 +4,21 @@
 import { z } from "npm:zod@3.25.76";
 
 export const PlaybookRuleSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().min(3),
-  description: z.string().min(10),
+  id: z.string().min(1).max(100),
+  title: z.string().min(3).max(200),
+  description: z.string().min(10).max(2000),
   severity: z.enum(["low", "medium", "high"]),
 });
 export type PlaybookRule = z.infer<typeof PlaybookRuleSchema>;
-export const PlaybookRuleArraySchema = z.array(PlaybookRuleSchema).min(1);
+export const PlaybookRuleArraySchema = z.array(PlaybookRuleSchema).min(1).max(20);
 
 export const AuditResultItemSchema = z.object({
-  category: z.string().min(1),
+  category: z.string().min(1).max(200),
   status: z.enum(["passed", "flagged", "missing"]),
   critical_level: z.enum(["low", "medium", "high"]),
-  contract_snippet: z.string().default(""),
-  description: z.string().default(""),
-  alternative_suggestion: z.string().default(""),
+  contract_snippet: z.string().max(5000).default(""),
+  description: z.string().max(5000).default(""),
+  alternative_suggestion: z.string().max(5000).default(""),
 });
 export type AuditResultItem = z.infer<typeof AuditResultItemSchema>;
 
@@ -68,8 +68,8 @@ export function parseAuditResponse(
 // this keeps cost close to the fast-model baseline while giving the
 // highest-stakes findings a second, higher-quality opinion.
 // ---------------------------------------------------------------------------
-export const FAST_MODEL = "gemini-2.5-flash";
-export const ESCALATION_MODEL = "gemini-2.5-pro";
+export const FAST_MODEL = 'gemini-3.8-flash';
+export const ESCALATION_MODEL = 'gemini-3.8-pro';
 
 export function needsEscalation(item: AuditResultItem): boolean {
   return item.status !== "passed" && item.critical_level === "high";
