@@ -24,14 +24,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    let initialized = false;
     let activeUserId: string | null = null;
     let profileRequestId = 0;
+    const initializationTimeout = setTimeout(() => {
+      if (mounted && !initialized) setLoading(false);
+    }, 3000);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!initialized) {
+        initialized = true;
+        clearTimeout(initializationTimeout);
+      }
+
       const nextUserId = nextSession?.user.id ?? null;
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
-      if (nextUserId === activeUserId) return;
+      if (nextUserId === activeUserId) {
+        if (!nextUserId) setLoading(false);
+        return;
+      }
 
       activeUserId = nextUserId;
       const requestId = ++profileRequestId;
@@ -65,6 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
+      clearTimeout(initializationTimeout);
       profileRequestId += 1;
       subscription.unsubscribe();
     };

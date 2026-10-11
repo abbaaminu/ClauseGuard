@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowLeft, AlertTriangle, XCircle, AlertCircle,
-  ChevronDown, Copy, Check, Loader2, FileText
+  Copy, Check, Loader2, FileText
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,13 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { RiskBadge, CriticalBadge, StatusBadge } from '@/components/contracts/Badges';
-import { getContractById, getAuditResults, runAudit, subscribeToContract } from '@/services/api';
+import {
+  getContractById,
+  getAuditResults,
+  runAudit,
+  subscribeToContract,
+  type ContractStatusUpdate,
+} from '@/services/api';
 import type { Contract, AuditResult } from '@/types/types';
 
 export default function ContractWorkspacePage() {
@@ -35,20 +41,21 @@ export default function ContractWorkspacePage() {
       setLoading(false);
       return;
     }
+    const contractId = id;
     let cancelled = false;
-    let latestUpdate: { id: string; status: Contract['status']; risk_score: Contract['risk_score'] } | null = null;
+    let latestUpdate: ContractStatusUpdate | null = null;
     let currentStatus: Contract['status'] | null = null;
 
     const refreshResults = async () => {
       try {
-        const nextResults = await getAuditResults(id);
+        const nextResults = await getAuditResults(contractId);
         if (!cancelled) setResults(nextResults);
       } catch {
         if (!cancelled) toast.error('Failed to refresh audit results.');
       }
     };
 
-    const unsubscribe = subscribeToContract(id, (update) => {
+    const unsubscribe = subscribeToContract(contractId, (update) => {
       const previousStatus = currentStatus;
       latestUpdate = update;
       currentStatus = update.status;
@@ -73,8 +80,8 @@ export default function ContractWorkspacePage() {
     async function load() {
       try {
         const [c, r] = await Promise.all([
-          getContractById(id),
-          getAuditResults(id),
+          getContractById(contractId),
+          getAuditResults(contractId),
         ]);
         if (cancelled) return;
         const refreshedContract = c && latestUpdate?.id === c.id
