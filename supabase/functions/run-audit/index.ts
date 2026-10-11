@@ -381,7 +381,7 @@ async function callGemini(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        signal: AbortSignal.timeout(45_000),
+        signal: AbortSignal.timeout(90_000),
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
@@ -433,7 +433,7 @@ async function callGemini(
     return {
       ok: false,
       error: err instanceof DOMException && err.name === 'TimeoutError'
-        ? `Gemini ${model} did not respond within 45 seconds. Try again later.`
+        ? `Gemini ${model} did not respond within 90 seconds. Try again later.`
         : `Could not reach Gemini ${model} or read its response. Check provider availability and try again.`,
     };
   }
