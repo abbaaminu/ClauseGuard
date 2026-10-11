@@ -1,4 +1,4 @@
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 import { loadEnv } from '../_shared/env.ts';
 import { redactPii, unredactAuditItem } from '../_shared/redact.ts';
 import {
@@ -16,9 +16,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Max-Age': '86400',
-};
+} as const;
 
-class AuditInputError extends Error {}
+class AuditInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuditInputError';
+  }
+}
+
+class AiProviderError extends Error {
+  constructor(message: string, readonly status: 502 | 503 = 502) {
+    super(message);
+    this.name = 'AiProviderError';
+  }
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -31,7 +43,7 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  let env;
+  let env: ReturnType<typeof loadEnv>;
   try {
     env = loadEnv();
   } catch (envErr) {
@@ -120,7 +132,10 @@ Deno.serve(async (req: Request) => {
     }
     const rules: PlaybookRule[] = parsedRules.data;
     if (!env.GOOGLE_API_KEY && !env.ALLOW_MOCK_AUDITS) {
-      throw new Error('No AI provider is configured');
+      throw new AiProviderError(
+        'AI auditing is not configured. Set the GOOGLE_API_KEY secret for this Supabase project.',
+        503
+      );
     }
 
     const { data: claimedContract, error: processingError } = await serviceClient
@@ -145,6 +160,7 @@ Deno.serve(async (req: Request) => {
 
     let auditResults: AuditResultItem[] = [];
     let usedModel: string | null = null;
+    let fastModelError: string | null = null;
 
     if (env.GOOGLE_API_KEY && contractText && rules.length > 0) {
       const fastResult = await callGemini(env.GOOGLE_API_KEY, FAST_MODEL, contractText, rules);
@@ -167,14 +183,19 @@ Deno.serve(async (req: Request) => {
           }
         }
       } else {
-        console.error('Fast-model response failed schema validation:', fastResult.error);
+        fastModelError = fastResult.error;
+        console.error(`Gemini ${FAST_MODEL} request failed:`, fastResult.error);
       }
     }
 
-    // Fallback: deterministic mock audit when no AI key or empty/invalid result
+    // Use mock results only when explicitly enabled; otherwise return the provider failure.
     if (auditResults.length === 0) {
       if (!env.ALLOW_MOCK_AUDITS) {
-        throw new Error('The AI provider did not return a valid audit');
+        throw new AiProviderError(
+          fastModelError
+            ? `Gemini could not complete the audit: ${fastModelError}`
+            : 'Gemini did not return any usable audit results. Check the API response and try again.'
+        );
       }
       auditResults = generateMockAuditResults(contractText, rules);
       usedModel = usedModel ?? 'mock';
@@ -231,10 +252,14 @@ Deno.serve(async (req: Request) => {
     }
     return new Response(
       JSON.stringify({
-        error: err instanceof AuditInputError ? err.message : 'Internal server error',
+        error: err instanceof AuditInputError || err instanceof AiProviderError
+          ? err.message
+          : 'Internal server error',
       }),
       {
-        status: err instanceof AuditInputError ? 422 : 500,
+        status: err instanceof AuditInputError ? 422
+          : err instanceof AiProviderError ? err.status
+          : 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );
@@ -273,14 +298,79 @@ async function callGemini(
 
     if (!res.ok) {
       const errText = await res.text();
-      return { ok: false, error: `HTTP ${res.status}: ${errText.slice(0, 300)}` };
+      return { ok: false, error: describeGeminiHttpError(res.status, model, errText) };
     }
 
-    const data = await res.json();
-    const rawContent: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    return parseAuditResponse(rawContent);
+    const data: unknown = await res.json();
+    const rawContent = getGeminiCandidateText(data);
+    if (!rawContent) {
+      return {
+        ok: false,
+        error: `Gemini ${model} returned no audit content. The request may have been blocked or the response format may have changed.`,
+      };
+    }
+    const result = parseAuditResponse(rawContent);
+    return result.ok
+      ? result
+      : { ok: false, error: `Gemini ${model} returned an unusable audit response: ${result.error}.` };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    console.error(`Gemini ${model} request failed:`, err);
+    return {
+      ok: false,
+      error: `Could not reach Gemini ${model} or read its response. Check provider availability and try again.`,
+    };
+  }
+}
+
+function getGeminiCandidateText(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null || !('candidates' in data)) return null;
+  const candidates = data.candidates;
+  if (!Array.isArray(candidates)) return null;
+  const firstCandidate: unknown = candidates[0];
+  if (typeof firstCandidate !== 'object' || firstCandidate === null || !('content' in firstCandidate)) {
+    return null;
+  }
+  const content: unknown = firstCandidate.content;
+  if (typeof content !== 'object' || content === null || !('parts' in content)) return null;
+  const parts = content.parts;
+  if (!Array.isArray(parts)) return null;
+  const firstPart: unknown = parts[0];
+  if (typeof firstPart !== 'object' || firstPart === null || !('text' in firstPart)) return null;
+  return typeof firstPart.text === 'string' ? firstPart.text : null;
+}
+
+function describeGeminiHttpError(status: number, model: string, responseText: string): string {
+  const details = getGeminiErrorDetails(responseText);
+  const providerMessage = details?.message ? ` ${details.message}` : '';
+
+  if (status === 401 || status === 403) {
+    return `Gemini rejected the API key or denied access to ${model}. Verify the GOOGLE_API_KEY and its permissions.${providerMessage}`;
+  }
+  if (status === 404) {
+    return `Gemini model ${model} was not found or is unavailable for this API key.${providerMessage}`;
+  }
+  if (status === 429) {
+    return `Gemini rate limit or quota was exceeded. Check the Google AI quota and try again later.${providerMessage}`;
+  }
+  if (status >= 500) {
+    return `Gemini is temporarily unavailable (HTTP ${status}). Try again later.${providerMessage}`;
+  }
+  return `Gemini rejected the audit request for ${model} (HTTP ${status}). Check the provider configuration and try again.${providerMessage}`;
+}
+
+function getGeminiErrorDetails(
+  responseText: string
+): { message?: string } | null {
+  try {
+    const body: unknown = JSON.parse(responseText);
+    if (typeof body !== 'object' || body === null || !('error' in body)) return null;
+    const error = body.error;
+    if (typeof error !== 'object' || error === null || !('message' in error)) return null;
+    return typeof error.message === 'string'
+      ? { message: error.message.slice(0, 240) }
+      : null;
+  } catch {
+    return null;
   }
 }
 
@@ -456,8 +546,8 @@ function generateMockAuditResults(contractText: string, rules: PlaybookRule[]): 
 }
 
 function generateGenericResult(text: string, rule: PlaybookRule): Partial<AuditResultItem> {
-  const keywords = rule.title.toLowerCase().split(' ').filter((w) => w.length > 4);
-  const found = keywords.some((kw) => text.includes(kw));
+  const keywords = rule.title.toLowerCase().split(/\s+/).filter((w: string) => w.length > 4);
+  const found = keywords.some((kw: string) => text.includes(kw));
   return found
     ? {
         status: 'passed',

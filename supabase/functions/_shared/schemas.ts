@@ -39,15 +39,24 @@ export function parseAuditResponse(
     return { ok: false, error: "response was not valid JSON" };
   }
 
-  const candidate = Array.isArray(json)
-    ? json
-    : (json as Record<string, unknown>)?.results ??
-      (json as Record<string, unknown>)?.audit_results ??
-      Object.values(json as Record<string, unknown>)[0];
+  let candidate: unknown;
+  if (Array.isArray(json)) {
+    candidate = json;
+  } else if (typeof json === "object" && json !== null) {
+    const record = json as Record<string, unknown>;
+    candidate = record.results ?? record.audit_results ?? Object.values(record)[0];
+  } else {
+    candidate = json;
+  }
 
   const result = AuditResultArraySchema.safeParse(candidate);
   if (!result.success) {
-    return { ok: false, error: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") };
+    return {
+      ok: false,
+      error: result.error.issues
+        .map((i: { path: Array<string | number>; message: string }) => `${i.path.join(".")}: ${i.message}`)
+        .join("; "),
+    };
   }
   return { ok: true, data: result.data };
 }
@@ -59,8 +68,8 @@ export function parseAuditResponse(
 // this keeps cost close to the fast-model baseline while giving the
 // highest-stakes findings a second, higher-quality opinion.
 // ---------------------------------------------------------------------------
-export const FAST_MODEL = "gemini-1.5-flash";
-export const ESCALATION_MODEL = "gemini-1.5-pro";
+export const FAST_MODEL = "gemini-2.5-flash";
+export const ESCALATION_MODEL = "gemini-2.5-pro";
 
 export function needsEscalation(item: AuditResultItem): boolean {
   return item.status !== "passed" && item.critical_level === "high";
