@@ -43,9 +43,15 @@ Set the AI provider key only as a Supabase Edge Function secret, never as a Verc
 
 Use the checked-in Supabase migrations as the only source of truth. From the repository root, link the Supabase project and apply migrations with the Supabase CLI (`supabase link`, then `supabase db push`). Do not paste an alternate schema into the SQL Editor: the migrations implement organization-level tenancy, required `organization_id` values, RLS, and storage policies.
 
+The latest migration explicitly grants the minimum table and helper-function privileges the Supabase API roles need; RLS policies still enforce row-level access. After pushing migrations, confirm there are no pending migrations in the Supabase project.
+
 ### Step 4: Configure private contract storage
 
 Migration `00001_initial_clauseguard_schema.sql` creates the `contracts` bucket as private. Migration `00002_multi_tenancy_and_rls_hardening.sql` restricts object access to the caller's organization folder. Do not recreate the bucket as public or replace these policies with wildcard access.
+
+### Step 5: Deploy the SPA routes
+
+The Vercel rewrite in `vercel.json` serves the SPA entry point for client-side routes such as `/dashboard` and `/contracts/:id`. Keep this file in the deployment and redeploy after changing it so refreshing a route loads the app instead of returning a host-level 404.
 
 ---
 

@@ -10,7 +10,42 @@
 -- both for SELECT and for write attempts.
 -- ============================================================================
 BEGIN;
-SELECT plan(14);
+SELECT plan(30);
+
+-- API grants allow requests to reach RLS; they do not grant cross-tenant
+-- row access.
+SELECT ok(has_table_privilege('authenticated', 'public.profiles', 'SELECT'),
+  'authenticated can read profiles');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.profiles', 'INSERT'),
+  'authenticated cannot create profiles directly');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.profiles', 'UPDATE'),
+  'authenticated cannot change organization membership directly');
+SELECT ok(has_table_privilege('anon', 'public.playbooks', 'SELECT'),
+  'anonymous clients can read system playbooks');
+SELECT ok(has_table_privilege('authenticated', 'public.playbooks', 'SELECT'),
+  'authenticated can read playbooks');
+SELECT ok(has_table_privilege('authenticated', 'public.playbooks', 'INSERT'),
+  'authenticated can insert playbooks');
+SELECT ok(has_table_privilege('authenticated', 'public.playbooks', 'UPDATE'),
+  'authenticated can update playbooks');
+SELECT ok(has_table_privilege('authenticated', 'public.playbooks', 'DELETE'),
+  'authenticated can delete playbooks');
+SELECT ok(has_table_privilege('authenticated', 'public.contracts', 'SELECT'),
+  'authenticated can read contracts');
+SELECT ok(has_table_privilege('authenticated', 'public.contracts', 'INSERT'),
+  'authenticated can insert contracts');
+SELECT ok(has_table_privilege('authenticated', 'public.contracts', 'UPDATE'),
+  'authenticated can update contracts');
+SELECT ok(has_table_privilege('authenticated', 'public.contracts', 'DELETE'),
+  'authenticated can delete contracts');
+SELECT ok(has_table_privilege('authenticated', 'public.audit_results', 'SELECT'),
+  'authenticated can read audit results');
+SELECT ok(NOT has_table_privilege('authenticated', 'public.audit_results', 'INSERT'),
+  'authenticated cannot write audit results directly');
+SELECT ok(has_function_privilege('authenticated', 'public.auth_org_id()', 'EXECUTE'),
+  'authenticated can evaluate organization-scoped RLS policies');
+SELECT ok(has_function_privilege('anon', 'public.auth_org_id()', 'EXECUTE'),
+  'anonymous clients can evaluate playbook RLS policies');
 
 -- ---- Fixtures -----------------------------------------------------------
 INSERT INTO organizations (id, name) VALUES
