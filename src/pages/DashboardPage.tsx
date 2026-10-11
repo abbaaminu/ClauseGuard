@@ -83,8 +83,11 @@ export default function DashboardPage() {
       // Trigger audit
       try {
         await runAudit(contract.id);
-      } catch {
-        toast.error('Contract uploaded, but auditing failed. Check the document text, playbook, and AI configuration.');
+      } catch (err) {
+        const reason = err instanceof Error
+          ? err.message
+          : 'Check the document text, playbook, and AI configuration.';
+        toast.error(`Contract uploaded, but auditing failed: ${reason}`);
       }
       await fetchData();
     } catch (err) {

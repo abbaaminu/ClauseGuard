@@ -234,7 +234,23 @@ export async function runAudit(contractId: string): Promise<void> {
     method: 'POST',
   });
   if (error) {
-    const msg = await error?.context?.text?.();
-    throw new Error(msg || error.message);
+    let message = error.message || 'The audit request failed.';
+    try {
+      const responseText = await error.context?.text?.();
+      if (responseText) {
+        const responseBody: unknown = JSON.parse(responseText);
+        if (
+          typeof responseBody === 'object' &&
+          responseBody !== null &&
+          'error' in responseBody &&
+          typeof responseBody.error === 'string'
+        ) {
+          message = responseBody.error;
+        }
+      }
+    } catch (responseError) {
+      console.warn('Failed to read run-audit error response:', responseError);
+    }
+    throw new Error(message);
   }
 }

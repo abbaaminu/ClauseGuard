@@ -134,9 +134,14 @@ export default function ContractWorkspacePage() {
         toast.success('Contract audit completed.', { id: toastId });
         auditToastIdRef.current = null;
       }
-    } catch {
+    } catch (err) {
       if (auditToastIdRef.current === toastId) {
-        toast.error('Audit could not be restarted. Check the document text, playbook, and AI configuration.', { id: toastId });
+        toast.error(
+          err instanceof Error
+            ? `Audit could not be restarted: ${err.message}`
+            : 'Audit could not be restarted. Check the document text, playbook, and AI configuration.',
+          { id: toastId }
+        );
         auditToastIdRef.current = null;
       }
     } finally {

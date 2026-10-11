@@ -4,12 +4,13 @@
 import { z } from "npm:zod@3.25.76";
 
 export const PlaybookRuleSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  description: z.string(),
+  id: z.string().min(1),
+  title: z.string().min(3),
+  description: z.string().min(10),
   severity: z.enum(["low", "medium", "high"]),
 });
 export type PlaybookRule = z.infer<typeof PlaybookRuleSchema>;
+export const PlaybookRuleArraySchema = z.array(PlaybookRuleSchema).min(1);
 
 export const AuditResultItemSchema = z.object({
   category: z.string().min(1),

@@ -5,6 +5,7 @@ import {
   AuditResultItem,
   ESCALATION_MODEL,
   FAST_MODEL,
+  PlaybookRuleArraySchema,
   PlaybookRule,
   needsEscalation,
   parseAuditResponse,
@@ -13,7 +14,11 @@ import {
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Max-Age': '86400',
 };
+
+class AuditInputError extends Error {}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -102,15 +107,18 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const rawContractText = contract.file_content?.trim() ?? '';
-    const playbook = contract.playbook as { id: string; name: string; rules_json: PlaybookRule[] } | null;
-    const rules: PlaybookRule[] = playbook?.rules_json ?? [];
+    const rawContractText = typeof contract.file_content === 'string'
+      ? contract.file_content.trim()
+      : '';
+    const playbook = contract.playbook as { rules_json?: unknown } | null;
+    const parsedRules = PlaybookRuleArraySchema.safeParse(playbook?.rules_json);
     if (!rawContractText || rawContractText.startsWith('[Contract:')) {
-      throw new Error('Contract text extraction is unavailable');
+      throw new AuditInputError('Contract text is unavailable for auditing.');
     }
-    if (rules.length === 0) {
-      throw new Error('An audit requires at least one playbook rule');
+    if (!parsedRules.success) {
+      throw new AuditInputError('The selected playbook has no valid audit rules.');
     }
+    const rules: PlaybookRule[] = parsedRules.data;
     if (!env.GOOGLE_API_KEY && !env.ALLOW_MOCK_AUDITS) {
       throw new Error('No AI provider is configured');
     }
@@ -211,15 +219,24 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     console.error('run-audit error:', err);
     if (serviceClient && authorizedContractId) {
-      const { error: recoveryError } = await serviceClient
-        .from('contracts')
-        .update({ status: 'failed' })
-        .eq('id', authorizedContractId);
-      if (recoveryError) console.error('Failed to mark contract audit as failed:', recoveryError);
+      try {
+        const { error: recoveryError } = await serviceClient
+          .from('contracts')
+          .update({ status: 'failed' })
+          .eq('id', authorizedContractId);
+        if (recoveryError) console.error('Failed to mark contract audit as failed:', recoveryError);
+      } catch (recoveryError) {
+        console.error('Failed to mark contract audit as failed:', recoveryError);
+      }
     }
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({
+        error: err instanceof AuditInputError ? err.message : 'Internal server error',
+      }),
+      {
+        status: err instanceof AuditInputError ? 422 : 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
     );
   }
 });
