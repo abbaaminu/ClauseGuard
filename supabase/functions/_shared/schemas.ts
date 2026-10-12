@@ -68,7 +68,7 @@ export function parseAuditResponse(
 // this keeps cost close to the fast-model baseline while giving the
 // highest-stakes findings a second, higher-quality opinion.
 // ---------------------------------------------------------------------------
-export const FAST_MODEL = 'gemini-3.8-flash';
+export const FAST_MODEL = 'gemini-3.5-flash-lite';
 export const ESCALATION_MODEL = 'gemini-3.8-flash';
 
 export function needsEscalation(item: AuditResultItem): boolean {

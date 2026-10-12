@@ -82,7 +82,8 @@ export default function DashboardPage() {
       toast.success(`"${file.name}" uploaded. Starting audit…`);
       // Trigger audit
       try {
-        await runAudit(contract.id);
+        const { warning } = await runAudit(contract.id);
+        if (warning) toast.warning(`Audit completed with fallback results: ${warning}`);
       } catch (err) {
         const reason = err instanceof Error
           ? err.message

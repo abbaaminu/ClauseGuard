@@ -10,7 +10,7 @@ SET search_path = pg_catalog, public
 AS $$
 DECLARE
   contract_text text;
-  result jsonb;
+  audit_item jsonb;
 BEGIN
   IF jsonb_typeof(p_results) IS DISTINCT FROM 'array' THEN
     RAISE EXCEPTION 'audit results must be a JSON array';
@@ -33,33 +33,33 @@ BEGIN
     RAISE EXCEPTION 'contract is not in processing state';
   END IF;
 
-  FOR result IN SELECT value FROM jsonb_array_elements(p_results)
+    FOR audit_item IN SELECT value FROM jsonb_array_elements(p_results)
   LOOP
-    IF jsonb_typeof(result) IS DISTINCT FROM 'object'
-       OR jsonb_typeof(result->'category') IS DISTINCT FROM 'string'
-       OR length(result->>'category') NOT BETWEEN 1 AND 200
-       OR result->>'status' IS NULL
-       OR result->>'status' NOT IN ('passed', 'flagged', 'missing')
-       OR result->>'critical_level' IS NULL
-       OR result->>'critical_level' NOT IN ('low', 'medium', 'high')
-       OR jsonb_typeof(COALESCE(result->'contract_snippet', '""'::jsonb)) IS DISTINCT FROM 'string'
-       OR length(COALESCE(result->>'contract_snippet', '')) > 5000
-       OR jsonb_typeof(COALESCE(result->'alternative_suggestion', '""'::jsonb)) IS DISTINCT FROM 'string'
-       OR length(COALESCE(result->>'alternative_suggestion', '')) > 5000
-       OR jsonb_typeof(COALESCE(result->'description', '""'::jsonb)) IS DISTINCT FROM 'string'
-       OR length(COALESCE(result->>'description', '')) > 5000 THEN
+     IF jsonb_typeof(audit_item) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(audit_item->'category') IS DISTINCT FROM 'string'
+       OR length(audit_item->>'category') NOT BETWEEN 1 AND 200
+       OR audit_item->>'status' IS NULL
+       OR audit_item->>'status' NOT IN ('passed', 'flagged', 'missing')
+       OR audit_item->>'critical_level' IS NULL
+       OR audit_item->>'critical_level' NOT IN ('low', 'medium', 'high')
+       OR jsonb_typeof(COALESCE(audit_item->'contract_snippet', '""'::jsonb)) IS DISTINCT FROM 'string'
+       OR length(COALESCE(audit_item->>'contract_snippet', '')) > 5000
+       OR jsonb_typeof(COALESCE(audit_item->'alternative_suggestion', '""'::jsonb)) IS DISTINCT FROM 'string'
+       OR length(COALESCE(audit_item->>'alternative_suggestion', '')) > 5000
+       OR jsonb_typeof(COALESCE(audit_item->'description', '""'::jsonb)) IS DISTINCT FROM 'string'
+       OR length(COALESCE(audit_item->>'description', '')) > 5000 THEN
       RAISE EXCEPTION 'audit result contains invalid or oversized fields';
     END IF;
 
-    IF result->>'contract_snippet' <> ''
-       AND strpos(contract_text, result->>'contract_snippet') = 0 THEN
+     IF audit_item->>'contract_snippet' <> ''
+       AND strpos(contract_text, audit_item->>'contract_snippet') = 0 THEN
       RAISE EXCEPTION 'audit result snippet is not verbatim contract text';
     END IF;
   END LOOP;
 
   IF (
-    SELECT count(DISTINCT result->>'category')
-    FROM jsonb_array_elements(p_results) AS items(result)
+    SELECT count(DISTINCT items.item->>'category')
+    FROM jsonb_array_elements(p_results) AS items(item)
   ) <> jsonb_array_length(p_results) THEN
     RAISE EXCEPTION 'audit result categories must be unique';
   END IF;
@@ -78,13 +78,13 @@ BEGIN
   )
   SELECT
     p_contract_id,
-    result->>'category',
-    (result->>'status')::public.audit_status,
-    (result->>'critical_level')::public.critical_level,
-    COALESCE(result->>'contract_snippet', ''),
-    COALESCE(result->>'alternative_suggestion', ''),
-    COALESCE(result->>'description', '')
-  FROM jsonb_array_elements(p_results) AS items(result);
+    items.item->>'category',
+    (items.item->>'status')::public.audit_status,
+    (items.item->>'critical_level')::public.critical_level,
+    COALESCE(items.item->>'contract_snippet', ''),
+    COALESCE(items.item->>'alternative_suggestion', ''),
+    COALESCE(items.item->>'description', '')
+  FROM jsonb_array_elements(p_results) AS items(item);
 
   UPDATE public.contracts
   SET status = 'completed', risk_score = p_risk_score

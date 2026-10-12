@@ -228,13 +228,13 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
 
 // ─── Run Audit via Edge Function ──────────────────────────────────────────────
 
-export async function runAudit(contractId: string): Promise<void> {
-  const { error } = await supabase.functions.invoke('run-audit', {
+export async function runAudit(contractId: string): Promise<{ warning?: string }> {
+  const { data, error } = await supabase.functions.invoke('run-audit', {
     body: { contract_id: contractId },
     method: 'POST',
   });
   if (error) {
-    let message = error.message || 'The audit request failed.';
+    let message = error.message || 'The audit request failed. Check your connection and try again.';
     try {
       const responseText = await error.context?.text?.();
       if (responseText) {
@@ -253,4 +253,12 @@ export async function runAudit(contractId: string): Promise<void> {
     }
     throw new Error(message);
   }
+
+  if (
+    typeof data === 'object' && data !== null && 'warning' in data &&
+    typeof data.warning === 'string'
+  ) {
+    return { warning: data.warning };
+  }
+  return {};
 }

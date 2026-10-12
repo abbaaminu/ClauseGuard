@@ -123,7 +123,7 @@ export default function ContractWorkspacePage() {
     const toastId = toast.loading('Starting contract audit...');
     auditToastIdRef.current = toastId;
     try {
-      await runAudit(id);
+      const { warning } = await runAudit(id);
       const [updatedContract, updatedResults] = await Promise.all([
         getContractById(id),
         getAuditResults(id),
@@ -131,7 +131,11 @@ export default function ContractWorkspacePage() {
       if (updatedContract) setContract(updatedContract);
       setResults(updatedResults);
       if (auditToastIdRef.current === toastId) {
-        toast.success('Contract audit completed.', { id: toastId });
+        if (warning) {
+          toast.warning('Audit completed with fallback results.', { description: warning, id: toastId });
+        } else {
+          toast.success('Contract audit completed.', { id: toastId });
+        }
         auditToastIdRef.current = null;
       }
     } catch (err) {

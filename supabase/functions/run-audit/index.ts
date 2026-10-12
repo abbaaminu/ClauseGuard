@@ -1,3 +1,4 @@
+/// <reference path="./types.d.ts" />
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { loadEnv } from '../_shared/env.ts';
@@ -11,6 +12,10 @@ import {
   needsEscalation,
   parseAuditResponse,
 } from '../_shared/schemas.ts';
+
+declare const Deno: {
+  serve: (handler: (req: Request) => Response | Promise<Response>) => void;
+};
 
 type RunAuditJson =
   | string
@@ -265,6 +270,7 @@ Deno.serve(async (req: Request) => {
     let auditResults: AuditResultItem[] = [];
     let usedModel: string | null = null;
     let fastModelError: string | null = null;
+    let fallbackWarning: string | null = null;
 
     if (env.GOOGLE_API_KEY && contractText && rules.length > 0) {
       const fastResult = await callGemini(env.GOOGLE_API_KEY, FAST_MODEL, contractText, rules);
@@ -283,6 +289,7 @@ Deno.serve(async (req: Request) => {
             auditResults = auditResults.map((r) => byCategory.get(r.category) ?? r);
             usedModel = `${FAST_MODEL}+${ESCALATION_MODEL}`;
           } else {
+            fallbackWarning = `The high-severity verification pass could not run. The audit completed using ${FAST_MODEL} results. ${proResult.error}`;
             console.warn('Escalation pass failed validation, keeping fast-model results:', proResult.error);
           }
         }
@@ -303,6 +310,7 @@ Deno.serve(async (req: Request) => {
       }
       auditResults = generateMockAuditResults(contractText, rules);
       usedModel = usedModel ?? 'mock';
+      fallbackWarning = `Gemini could not complete this audit; generated mock results were used instead. Do not rely on them as a legal or compliance review.${fastModelError ? ` Provider detail: ${fastModelError}` : ' Configure GOOGLE_API_KEY to enable AI audits.'}`;
     }
 
     // Reverse redaction so stored/displayed text shows the real contract
@@ -335,7 +343,13 @@ Deno.serve(async (req: Request) => {
     if (completionError) throw completionError;
 
     return new Response(
-      JSON.stringify({ success: true, results_count: validated.length, risk_score: riskScore, model: usedModel }),
+      JSON.stringify({
+        success: true,
+        results_count: validated.length,
+        risk_score: riskScore,
+        model: usedModel,
+        ...(fallbackWarning ? { warning: fallbackWarning } : {}),
+      }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (err) {
