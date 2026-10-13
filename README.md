@@ -133,9 +133,9 @@ organization-wide and enforced by Supabase functions, not only by the UI.
 To enable subscriptions:
 
 1. Create monthly Starter and Pro prices in Paddle. Set the frontend build
-   variables `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_ENVIRONMENT` (`sandbox`
-   or `production`), `VITE_PADDLE_STARTER_PRICE_ID`, and
-   `VITE_PADDLE_PRO_PRICE_ID`.
+   variables `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_ENVIRONMENT` (`production`
+   by default; use `sandbox` only for testing), `VITE_PADDLE_STARTER_PRICE_ID`,
+   and `VITE_PADDLE_PRO_PRICE_ID`.
 2. Configure Supabase function secrets:
    `PADDLE_WEBHOOK_SECRET`, `PADDLE_CONTEXT_SECRET`,
    `PADDLE_API_KEY`, `PADDLE_ENVIRONMENT`, `PADDLE_STARTER_PRICE_ID`, and

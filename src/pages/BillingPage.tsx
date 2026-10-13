@@ -62,9 +62,7 @@ export default function BillingPage() {
 
     const initialize = () => {
       if (!window.Paddle || initializedRef.current) return;
-      if (env.VITE_PADDLE_ENVIRONMENT === 'sandbox') {
-        window.Paddle.Environment.set('sandbox');
-      }
+      window.Paddle.Environment.set(env.VITE_PADDLE_ENVIRONMENT);
       window.Paddle.Initialize({
         token: env.VITE_PADDLE_CLIENT_TOKEN!,
         eventCallback: (event) => {
