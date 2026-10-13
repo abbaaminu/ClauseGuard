@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink, useNavigate, Outlet } from 'react-router-dom';
 import {
-  LayoutDashboard, BookOpen, ShieldCheck, Menu, X,
+  LayoutDashboard, BookOpen, ShieldCheck, Menu, X, CreditCard,
   LogOut, ChevronRight, Moon, Sun
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -22,6 +22,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
   { label: 'Playbooks', path: '/playbooks', icon: <BookOpen className="h-4 w-4" /> },
+  { label: 'Plans & usage', path: '/billing', icon: <CreditCard className="h-4 w-4" /> },
 ];
 
 function SidebarNav({ onClose }: { onClose?: () => void }) {

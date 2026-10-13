@@ -11,6 +11,8 @@ import PlaybooksPage from '@/pages/PlaybooksPage';
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
 import AppLayout from '@/components/layouts/AppLayout';
+import BillingPage from '@/pages/BillingPage';
+import NotFound from '@/pages/NotFound';
 
 const App: React.FC = () => {
   return (
@@ -21,18 +23,21 @@ const App: React.FC = () => {
           <RouteGuard>
             <IntersectObserver />
             <Routes>
-            {/* Public */}
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            {/* App shell — layout wraps child pages via Outlet */}
-            <Route element={<AppLayout />}>
-              <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/contracts/:id" element={<ContractWorkspacePage />} />
-              <Route path="/playbooks" element={<PlaybooksPage />} />
-            </Route>
-            {/* Default */}
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              {/* Public */}
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+              {/* App shell — layout wraps child pages via Outlet */}
+              <Route element={<AppLayout />}>
+                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/contracts/:id" element={<ContractWorkspacePage />} />
+                <Route path="/playbooks" element={<PlaybooksPage />} />
+                <Route path="/billing" element={<BillingPage />} />
+                {/* Unknown paths render a real 404 instead of silently
+                    bouncing the user back to the dashboard. */}
+                <Route path="*" element={<NotFound />} />
+              </Route>
+              {/* Root */}
+              <Route path="/" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </RouteGuard>
         </AuthProvider>

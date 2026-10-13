@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowLeft, AlertTriangle, XCircle, AlertCircle,
-  Copy, Check, Loader2, FileText
+  Copy, Check, Loader2, FileText, Download, GitCompareArrows, Upload
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -11,14 +11,18 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { RiskBadge, CriticalBadge, StatusBadge } from '@/components/contracts/Badges';
+import { ContractDiff } from '@/components/contracts/ContractDiff';
 import {
   getContractById,
   getAuditResults,
+  getContractVersions,
+  addContractVersion,
+  getAuditUsage,
   runAudit,
   subscribeToContract,
   type ContractStatusUpdate,
 } from '@/services/api';
-import type { Contract, AuditResult } from '@/types/types';
+import type { Contract, AuditResult, ContractVersion } from '@/types/types';
 
 export default function ContractWorkspacePage() {
   const { id } = useParams<{ id: string }>();
@@ -26,12 +30,17 @@ export default function ContractWorkspacePage() {
 
   const [contract, setContract] = useState<Contract | null>(null);
   const [results, setResults] = useState<AuditResult[]>([]);
+  const [versions, setVersions] = useState<ContractVersion[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState('');
+  const [savingVersion, setSavingVersion] = useState(false);
+  const [canUseDocx, setCanUseDocx] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeSnippetId, setActiveSnippetId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isRerunning, setIsRerunning] = useState(false);
 
   const docViewerRef = useRef<HTMLDivElement>(null);
+  const versionInputRef = useRef<HTMLInputElement>(null);
   const highlightRefs = useRef<Record<string, HTMLSpanElement | null>>({});
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const auditToastIdRef = useRef<string | number | null>(null);
@@ -79,9 +88,10 @@ export default function ContractWorkspacePage() {
 
     async function load() {
       try {
-        const [c, r] = await Promise.all([
+        const [c, r, savedVersions] = await Promise.all([
           getContractById(contractId),
           getAuditResults(contractId),
+          getContractVersions(contractId),
         ]);
         if (cancelled) return;
         const refreshedContract = c && latestUpdate?.id === c.id
@@ -90,6 +100,8 @@ export default function ContractWorkspacePage() {
         currentStatus = refreshedContract?.status ?? null;
         setContract(refreshedContract);
         setResults(r);
+        setVersions(savedVersions);
+        setSelectedVersionId(savedVersions[0]?.id ?? '');
         if (latestUpdate?.status === 'completed') void refreshResults();
       } catch {
         if (!cancelled) toast.error('Failed to load contract.');
@@ -98,6 +110,13 @@ export default function ContractWorkspacePage() {
       }
     }
     load();
+    getAuditUsage()
+      .then(usage => {
+        if (!cancelled) setCanUseDocx(usage.can_use_custom_playbooks);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Could not load plan permissions for revision extraction.');
+      });
     return () => {
       cancelled = true;
       unsubscribe();
@@ -140,6 +159,7 @@ export default function ContractWorkspacePage() {
       }
     } catch (err) {
       if (auditToastIdRef.current === toastId) {
+        const quotaReached = err instanceof Error && /limit|credits exhausted/i.test(err.message);
         toast.error(
           err instanceof Error
             ? `Audit could not be restarted: ${err.message}`
@@ -147,9 +167,26 @@ export default function ContractWorkspacePage() {
           { id: toastId }
         );
         auditToastIdRef.current = null;
+        if (quotaReached) navigate('/billing');
       }
     } finally {
       setIsRerunning(false);
+    }
+  }
+
+  async function handleAddRevision(file: File | undefined) {
+    if (!file || !contract) return;
+    setSavingVersion(true);
+    try {
+      const version = await addContractVersion(contract, file);
+      setVersions(current => [version, ...current]);
+      setSelectedVersionId(version.id);
+      toast.success('Contract revision saved for comparison.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save this contract revision.');
+    } finally {
+      setSavingVersion(false);
+      if (versionInputRef.current) versionInputRef.current.value = '';
     }
   }
 
@@ -173,6 +210,7 @@ export default function ContractWorkspacePage() {
   const missing = results.filter(r => r.status === 'missing');
   const deviations = results.filter(r => r.status === 'flagged' && r.critical_level !== 'high');
   const passed = results.filter(r => r.status === 'passed');
+  const selectedVersion = versions.find(version => version.id === selectedVersionId);
 
   function renderHighlightedDocument() {
     if (!contractText) return null;
@@ -277,6 +315,17 @@ export default function ContractWorkspacePage() {
         <div className="flex items-center gap-2 shrink-0">
           <RiskBadge score={contract.risk_score} />
           <StatusBadge status={contract.status} />
+          {contract.status === 'completed' && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={() => window.print()}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export PDF
+            </Button>
+          )}
           {contract.status === 'completed' || contract.status === 'failed' ? (
             <Button
               variant="ghost"
@@ -297,12 +346,49 @@ export default function ContractWorkspacePage() {
         {/* Left: Document viewer */}
         <div className="flex-1 min-w-0 overflow-y-auto p-6 md:p-8" ref={docViewerRef}>
           <div className="max-w-2xl mx-auto">
-            <div className="text-xs text-muted-foreground mb-4 flex items-center gap-2">
-              <FileText className="h-3.5 w-3.5" />
-              Document Preview
-              {results.length > 0 && (
-                <span className="ml-1">· Click highlighted text to view associated findings</span>
-              )}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="text-xs text-muted-foreground flex items-center gap-2">
+                <FileText className="h-3.5 w-3.5" />
+                Document Preview
+                {results.length > 0 && (
+                  <span className="ml-1">· Click highlighted text to view associated findings</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {versions.length > 0 && (
+                  <select
+                    aria-label="Choose a contract revision to compare"
+                    className="h-8 max-w-48 rounded-md border border-input bg-background px-2 text-xs"
+                    value={selectedVersionId}
+                    onChange={event => setSelectedVersionId(event.target.value)}
+                  >
+                    {versions.map(version => (
+                      <option key={version.id} value={version.id}>
+                        {version.file_name} · {new Date(version.created_at).toLocaleDateString()}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  ref={versionInputRef}
+                  type="file"
+                  accept={canUseDocx ? '.txt,.pdf,.docx' : '.txt,.pdf'}
+                  className="hidden"
+                  aria-label="Upload a newer contract revision"
+                  onChange={event => void handleAddRevision(event.target.files?.[0])}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  disabled={savingVersion}
+                  onClick={() => versionInputRef.current?.click()}
+                >
+                  {savingVersion ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  {savingVersion ? 'Saving…' : 'Add revision'}
+                </Button>
+              </div>
             </div>
             <div className="font-mono text-sm leading-relaxed whitespace-pre-wrap text-foreground/90 border border-border rounded-md p-6 bg-card">
               {contract.status === 'processing' ? (
@@ -318,6 +404,14 @@ export default function ContractWorkspacePage() {
                 </p>
               )}
             </div>
+            {hasExtractedText && selectedVersion && (
+              <ContractDiff
+                beforeLabel={contract.file_name}
+                afterLabel={selectedVersion.file_name}
+                before={contractText}
+                after={selectedVersion.file_content}
+              />
+            )}
           </div>
         </div>
 
@@ -415,6 +509,70 @@ export default function ContractWorkspacePage() {
           )}
         </div>
       </div>
+      {contract.status === 'completed' && (
+        <>
+          <style>{`
+            @media print {
+              body * { visibility: hidden !important; }
+              #audit-report, #audit-report * { visibility: visible !important; }
+              #audit-report {
+                display: block !important;
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                padding: 36px;
+                color: #17212b;
+                background: white;
+                font-family: Arial, sans-serif;
+              }
+              html, body, #root, #root * {
+                height: auto !important;
+                max-height: none !important;
+                overflow: visible !important;
+              }
+              @page { margin: 14mm; }
+            }
+          `}</style>
+          <article id="audit-report" className="hidden">
+            <header style={{ borderBottom: '2px solid #17212b', paddingBottom: 16, marginBottom: 24 }}>
+              <p style={{ color: '#426b65', fontWeight: 700, letterSpacing: 2, fontSize: 12 }}>CLAUSEGUARD · COMPLIANCE SUMMARY</p>
+              <h1 style={{ fontSize: 26, margin: '12px 0 6px' }}>{contract.file_name}</h1>
+              <p style={{ color: '#58636d', fontSize: 12 }}>
+                Generated {new Date().toLocaleDateString()} · Playbook: {contract.playbook?.name ?? 'No playbook'}
+              </p>
+            </header>
+            <section style={{ display: 'flex', gap: 24, marginBottom: 24 }}>
+              <div style={{ border: '1px solid #cbd5d1', borderRadius: 8, padding: 16, minWidth: 150 }}>
+                <p style={{ color: '#58636d', fontSize: 11 }}>OVERALL RISK SCORE</p>
+                <p style={{ fontSize: 32, fontWeight: 700, margin: '5px 0' }}>{contract.risk_score ?? 0}/100</p>
+              </div>
+              <div style={{ border: '1px solid #cbd5d1', borderRadius: 8, padding: 16 }}>
+                <p style={{ color: '#58636d', fontSize: 11 }}>AUDIT SUMMARY</p>
+                <p style={{ fontSize: 14, margin: '6px 0' }}>{results.length} rules reviewed · {passed.length} passed</p>
+                <p style={{ fontSize: 14, margin: '6px 0', color: '#9a3412' }}>
+                  {results.filter(result => result.status !== 'passed').length} items require attention
+                </p>
+              </div>
+            </section>
+            <h2 style={{ fontSize: 18, marginBottom: 12 }}>Flagged compliance findings</h2>
+            {results.filter(result => result.status !== 'passed').length === 0 ? (
+              <p>No compliance flags were identified by the selected playbook.</p>
+            ) : results.filter(result => result.status !== 'passed').map(result => (
+              <section key={result.id} style={{ borderLeft: '4px solid #c2410c', background: '#fff7ed', padding: '12px 16px', marginBottom: 12 }}>
+                <h3 style={{ fontSize: 14, margin: '0 0 5px' }}>
+                  {result.category} · {result.critical_level.toUpperCase()} · {result.status.toUpperCase()}
+                </h3>
+                <p style={{ fontSize: 12, margin: '4px 0' }}>{result.description}</p>
+                {result.contract_snippet && <p style={{ fontSize: 12, fontStyle: 'italic', margin: '7px 0' }}>“{result.contract_snippet}”</p>}
+                {result.alternative_suggestion && <p style={{ fontSize: 12, margin: '7px 0' }}><strong>Suggested alternative:</strong> {result.alternative_suggestion}</p>}
+              </section>
+            ))}
+            <footer style={{ borderTop: '1px solid #cbd5d1', paddingTop: 12, marginTop: 24, color: '#58636d', fontSize: 10 }}>
+              Prepared with ClauseGuard. This automated compliance summary is not legal advice.
+            </footer>
+          </article>
+        </>
+      )}
     </div>
   );
 }

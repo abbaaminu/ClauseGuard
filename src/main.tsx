@@ -10,7 +10,13 @@ Sentry.init({
 });
 
 createRoot(document.getElementById("root")!).render(
-  <Sentry.ErrorBoundary fallback={<p>应用发生错误，请刷新页面重试</p>}>
+  <Sentry.ErrorBoundary
+    fallback={
+      <div className="flex min-h-screen items-center justify-center p-6 text-sm text-muted-foreground">
+        Something went wrong. Please reload the page.
+      </div>
+    }
+  >
     <AppWrapper>
       <App />
     </AppWrapper>

@@ -3,3 +3,12 @@ enable_confirmations = false
 
 [functions.run-audit]
 verify_jwt = true
+
+[functions.paddle-webhook]
+verify_jwt = false
+
+[functions.paddle-checkout-context]
+verify_jwt = true
+
+[functions.change-paddle-plan]
+verify_jwt = true

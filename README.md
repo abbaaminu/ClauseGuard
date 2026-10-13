@@ -117,6 +117,46 @@ To develop backend services:
 2. Install relevant dependencies
 3. For database needs, use Supabase (https://supabase.com/)
 
+## Trial, subscriptions, and usage enforcement
+
+New organizations receive three audit credits automatically and do not need to
+enter payment details. The database reserves a credit when a contract is
+created and reserves another credit for each re-analysis. Usage limits are
+organization-wide and enforced by Supabase functions, not only by the UI.
+
+| Plan | Monthly price | Monthly audits | Included features |
+| --- | ---: | ---: | --- |
+| Free trial | $0 | 3 total | Standard playbooks, TXT/PDF extraction |
+| Starter | $5 | 25 | Standard playbooks, TXT/PDF extraction, PDF reports |
+| Pro | $15 | 150 | Custom weighted playbooks, team collaboration, priority PDF reports, DOCX extraction |
+
+To enable subscriptions:
+
+1. Create monthly Starter and Pro prices in Paddle. Set the frontend build
+   variables `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_ENVIRONMENT` (`sandbox`
+   or `production`), `VITE_PADDLE_STARTER_PRICE_ID`, and
+   `VITE_PADDLE_PRO_PRICE_ID`.
+2. Configure Supabase function secrets:
+   `PADDLE_WEBHOOK_SECRET`, `PADDLE_CONTEXT_SECRET`,
+   `PADDLE_API_KEY`, `PADDLE_ENVIRONMENT`, `PADDLE_STARTER_PRICE_ID`, and
+   `PADDLE_PRO_PRICE_ID`. The Paddle price IDs must match the frontend values.
+3. Apply database migrations with `supabase db push` and deploy
+   `paddle-checkout-context`, `change-paddle-plan`, and `paddle-webhook`.
+4. Register
+   `https://<project-ref>.supabase.co/functions/v1/paddle-webhook` as a Paddle
+   notification destination for subscription created, updated, activated,
+   resumed, paused, and canceled events. Copy its notification secret to
+   `PADDLE_WEBHOOK_SECRET`.
+
+The checkout context function signs each organization's ID before it is
+included in Paddle metadata; the webhook verifies both that signature and the
+Paddle event signature before changing subscription entitlements. Never put
+either signing secret in a frontend environment variable.
+
+Audit reports use the browser print dialog; choose **Save as PDF** to download
+the branded report without uploading contract data to a PDF conversion
+service.
+
 ## Features
 
 - AI-powered clause analysis

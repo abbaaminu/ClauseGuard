@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -25,14 +26,15 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from '@/components/ui/dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { getPlaybooks, createPlaybook, updatePlaybook, deletePlaybook } from '@/services/api';
-import type { Playbook, PlaybookRule, CriticalLevel } from '@/types/types';
+import { getPlaybooks, createPlaybook, updatePlaybook, deletePlaybook, getAuditUsage } from '@/services/api';
+import type { Playbook, CriticalLevel } from '@/types/types';
 
 const ruleSchema = z.object({
   id: z.string(),
   title: z.string().min(3, 'Rule title is required'),
   description: z.string().min(10, 'Provide a detailed description'),
   severity: z.enum(['low', 'medium', 'high']),
+  weight: z.number().int().min(1).max(5),
 });
 
 const playbookSchema = z.object({
@@ -55,6 +57,7 @@ export default function PlaybooksPage() {
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [canManageCustomPlaybooks, setCanManageCustomPlaybooks] = useState(false);
 
   const form = useForm<PlaybookFormValues>({
     resolver: zodResolver(playbookSchema),
@@ -73,13 +76,18 @@ export default function PlaybooksPage() {
     }
   }
 
-  useEffect(() => { fetchPlaybooks(); }, []);
+  useEffect(() => {
+    void fetchPlaybooks();
+    getAuditUsage()
+      .then(usage => setCanManageCustomPlaybooks(usage.can_use_custom_playbooks))
+      .catch(() => toast.error('Failed to load your plan permissions.'));
+  }, []);
 
   function openCreateDialog() {
     setEditingPlaybook(null);
     form.reset({
       name: '',
-      rules_json: [{ id: crypto.randomUUID(), title: '', description: '', severity: 'medium' }],
+      rules_json: [{ id: crypto.randomUUID(), title: '', description: '', severity: 'medium', weight: 1 }],
     });
     setDialogOpen(true);
   }
@@ -91,13 +99,17 @@ export default function PlaybooksPage() {
   }
 
   async function onSubmit(values: PlaybookFormValues) {
+    if (!canManageCustomPlaybooks) {
+      toast.error('Custom playbooks are available on the Pro plan.');
+      return;
+    }
     setSaving(true);
     try {
       if (editingPlaybook) {
-        await updatePlaybook(editingPlaybook.id, values.name, values.rules_json as PlaybookRule[]);
+        await updatePlaybook(editingPlaybook.id, values.name, values.rules_json);
         toast.success('Playbook updated.');
       } else {
-        await createPlaybook(values.name, values.rules_json as PlaybookRule[]);
+        await createPlaybook(values.name, values.rules_json);
         toast.success('Playbook created.');
       }
       setDialogOpen(false);
@@ -129,12 +141,13 @@ export default function PlaybooksPage() {
     <div className="px-4 md:px-8 py-8 max-w-4xl mx-auto w-full">
       <PageHeader
         title="Playbooks"
-        subtitle="Manage compliance templates and custom audit rules."
+        subtitle="Choose standard compliance profiles or build weighted custom audit rules."
         action={
-          <Button onClick={openCreateDialog} size="sm" className="h-8 text-xs gap-1.5">
-            <Plus className="h-3.5 w-3.5" />
-            New Playbook
-          </Button>
+          canManageCustomPlaybooks
+            ? <Button onClick={openCreateDialog} size="sm" className="h-8 text-xs gap-1.5">
+                <Plus className="h-3.5 w-3.5" /> New Playbook
+              </Button>
+            : <Button asChild size="sm" variant="outline"><Link to="/billing">Unlock custom rules with Pro</Link></Button>
         }
       />
 
@@ -177,6 +190,14 @@ export default function PlaybooksPage() {
             <span className="text-xs text-muted-foreground">{customPlaybooks.length} total</span>
           )}
         </div>
+        {!canManageCustomPlaybooks && (
+          <Card className="mb-3 border-dashed">
+            <CardContent className="flex items-center justify-between gap-3 py-4">
+              <p className="text-sm text-muted-foreground">Create, edit, and weight your own rules with Pro.</p>
+              <Button asChild size="sm" variant="outline"><Link to="/billing">Explore Pro</Link></Button>
+            </CardContent>
+          </Card>
+        )}
 
         {loading ? (
           <div className="space-y-3">
@@ -187,7 +208,7 @@ export default function PlaybooksPage() {
             <CardContent className="flex flex-col items-center gap-3 py-10">
               <BookOpen className="h-8 w-8 text-muted-foreground/40" strokeWidth={1} />
               <p className="text-sm text-muted-foreground">No custom playbooks yet.</p>
-              <Button variant="ghost" size="sm" className="text-xs gap-1.5" onClick={openCreateDialog}>
+              <Button variant="ghost" size="sm" className="text-xs gap-1.5" onClick={openCreateDialog} disabled={!canManageCustomPlaybooks}>
                 <Plus className="h-3.5 w-3.5" />
                 Create your first playbook
               </Button>
@@ -204,6 +225,7 @@ export default function PlaybooksPage() {
                 onEdit={() => openEditDialog(pb)}
                 onDelete={() => handleDelete(pb.id)}
                 deletingId={deletingId}
+                readonly={!canManageCustomPlaybooks}
               />
             ))}
           </div>
@@ -244,7 +266,7 @@ export default function PlaybooksPage() {
                     size="sm"
                     className="h-7 text-xs gap-1.5"
                     onClick={() =>
-                      append({ id: crypto.randomUUID(), title: '', description: '', severity: 'medium' })
+                      append({ id: crypto.randomUUID(), title: '', description: '', severity: 'medium', weight: 1 })
                     }
                   >
                     <Plus className="h-3 w-3" /> Add rule
@@ -316,6 +338,27 @@ export default function PlaybooksPage() {
                                 <SelectItem value="high">High</SelectItem>
                               </SelectContent>
                             </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name={`rules_json.${index}.weight`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs">Risk score weight (1–5)</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={5}
+                                step={1}
+                                className="h-8 px-2.5 text-xs"
+                                value={f.value}
+                                onChange={event => f.onChange(event.target.valueAsNumber)}
+                              />
+                            </FormControl>
                             <FormMessage />
                           </FormItem>
                         )}
@@ -445,6 +488,9 @@ function PlaybookCard({
                     <p className="text-xs font-medium mb-0.5">{rule.title}</p>
                     <p className="text-xs text-muted-foreground leading-relaxed">{rule.description}</p>
                   </div>
+                  <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                    Weight {rule.weight ?? 1}
+                  </span>
                 </div>
               ))}
             </div>

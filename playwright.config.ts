@@ -11,7 +11,10 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run build && npm run preview -- --port 4173',
+    // `--host 127.0.0.1` is required: `vite preview` defaults to `localhost`,
+    // which resolves to IPv6 `::1` on some platforms, leaving the IPv4 health
+    // check / baseURL below unreachable (webServer timeout).
+    command: 'npm run build && npm run preview -- --port 4173 --host 127.0.0.1',
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

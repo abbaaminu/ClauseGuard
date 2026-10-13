@@ -37,13 +37,15 @@ VITE_SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 > **Note:** These values are public-safe (anon key is meant for client-side use)
 
-Set the AI provider key only as a Supabase Edge Function secret, never as a Vercel/browser variable. Configure it with `supabase secrets set GOOGLE_API_KEY=... REDACT_PII_BEFORE_LLM=true ALLOW_MOCK_AUDITS=false`. Supabase provides its URL and anon/service-role keys to deployed Edge Functions; do not copy the service-role key into frontend configuration. Mock results are disabled by default and must only be explicitly enabled in isolated development environments.
+Set provider keys only as Supabase Edge Function secrets, never as Vercel/browser variables. Configure AI auditing with `GOOGLE_API_KEY`, `REDACT_PII_BEFORE_LLM=true`, and `ALLOW_MOCK_AUDITS=false`. To enable email alerts for a risk score of 70+ or a non-passing high-severity finding, also set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` to a sender verified with Resend. Notification failures do not fail or roll back a completed audit. Supabase provides its URL and anon/service-role keys to deployed Edge Functions; do not copy the service-role key into frontend configuration. Mock results are disabled by default and must only be explicitly enabled in isolated development environments.
 
 ### Step 3: Apply the database schema
 
 Use the checked-in Supabase migrations as the only source of truth. From the repository root, link the Supabase project and apply migrations with the Supabase CLI (`supabase link`, then `supabase db push`). Do not paste an alternate schema into the SQL Editor: the migrations implement organization-level tenancy, required `organization_id` values, RLS, and storage policies.
 
 The latest migration explicitly grants the minimum table and helper-function privileges the Supabase API roles need; RLS policies still enforce row-level access. After pushing migrations, confirm there are no pending migrations in the Supabase project.
+
+Migration `00008_organization_invites.sql` gives each workspace an owner-managed invite flow. Owners can create a code from the dashboard; new users enter it during registration to join that organization. Codes expire after 7 days and permit up to 10 signups. Members of one organization can view that organization's contracts and audit results through the existing tenant RLS policies.
 
 ### Step 4: Configure private contract storage
 

@@ -12,7 +12,7 @@ test.describe('Contract review workflow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/login');
     await page.getByLabel(/email/i).fill(TEST_EMAIL);
-    await page.getByLabel(/password/i).fill(TEST_PASSWORD);
+    await page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
     await expect(page).toHaveURL(/dashboard/i);
   });

@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { FileText, RefreshCw, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { FileText, RefreshCw, ChevronLeft, ChevronRight, Trash2, UsersRound, Copy } from 'lucide-react';
 import { PageHeader } from '@/components/layouts/AppLayout';
 import { UploadZone } from '@/components/contracts/UploadZone';
 import { RiskBadge, StatusBadge } from '@/components/contracts/Badges';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
@@ -15,11 +16,11 @@ import {
   AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from '@/components/ui/alert-dialog';
 import {
-  getContracts, getPlaybooks, getDashboardMetrics,
-  uploadContract, runAudit, deleteContract
+  getContracts, getPlaybooks, getDashboardMetrics, createOrganizationInvite,
+  uploadContract, runAudit, deleteContract, getAuditUsage
 } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
-import type { Contract, Playbook, DashboardMetrics } from '@/types/types';
+import type { Contract, Playbook, DashboardMetrics, AuditUsage } from '@/types/types';
 
 const PAGE_SIZE = 10;
 
@@ -31,25 +32,30 @@ export default function DashboardPage() {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [usage, setUsage] = useState<AuditUsage | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [creatingInvite, setCreatingInvite] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const fetchData = useCallback(async () => {
     try {
-      const [pb, contractsRes, met] = await Promise.all([
+      const [pb, contractsRes, met, auditUsage] = await Promise.all([
         getPlaybooks(),
         getContracts(page, PAGE_SIZE),
         getDashboardMetrics(),
+        getAuditUsage(),
       ]);
       setPlaybooks(pb);
       setContracts(contractsRes.data);
       setTotalCount(contractsRes.count);
       setMetrics(met);
+      setUsage(auditUsage);
     } catch {
       toast.error('Failed to load dashboard data. Please try again.');
     } finally {
@@ -76,6 +82,16 @@ export default function DashboardPage() {
       toast.error('Your organization profile is unavailable. Please refresh and try again.');
       return;
     }
+    if (usage && !usage.can_upload) {
+      toast.error('Your audit limit has been reached. Upgrade your plan to continue.');
+      navigate('/billing');
+      return;
+    }
+    if (file.name.toLowerCase().endsWith('.docx') && !usage?.can_use_custom_playbooks) {
+      toast.error('DOCX extraction is available on the Pro plan.');
+      navigate('/billing');
+      return;
+    }
     setUploading(true);
     try {
       const contract = await uploadContract(file, playbookId, profile.organization_id);
@@ -89,10 +105,19 @@ export default function DashboardPage() {
           ? err.message
           : 'Check the document text, playbook, and AI configuration.';
         toast.error(`Contract uploaded, but auditing failed: ${reason}`);
+        if (/limit|credits exhausted/i.test(reason)) {
+          void fetchData();
+          navigate('/billing');
+        }
       }
       await fetchData();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed. Please try again.');
+      const message = err instanceof Error ? err.message : 'Upload failed. Please try again.';
+      toast.error(message);
+      if (/AUDIT_QUOTA_EXCEEDED|audit limit|free audit credits/i.test(message)) {
+        void fetchData();
+        navigate('/billing');
+      }
     } finally {
       setUploading(false);
     }
@@ -108,6 +133,28 @@ export default function DashboardPage() {
       toast.error('Failed to delete contract.');
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function handleCreateInvite() {
+    setCreatingInvite(true);
+    try {
+      setInviteCode(await createOrganizationInvite());
+      toast.success('Team invite code created.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not create a team invite code.');
+    } finally {
+      setCreatingInvite(false);
+    }
+  }
+
+  async function handleCopyInvite() {
+    if (!inviteCode) return;
+    try {
+      await navigator.clipboard.writeText(inviteCode);
+      toast.success('Invite code copied.');
+    } catch {
+      toast.error('Clipboard access is unavailable. Select and copy the invite code.');
     }
   }
 
@@ -155,6 +202,80 @@ export default function DashboardPage() {
         )}
       </div>
 
+      <Card className="mb-8 border-accent/30">
+        <CardContent className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 py-4">
+          <div>
+            <p className="text-sm font-medium capitalize">
+              {usage?.plan_tier === 'free'
+                ? `${usage.free_audits_remaining} free ${usage.free_audits_remaining === 1 ? 'audit' : 'audits'} remaining`
+                : `${usage?.monthly_audits_remaining ?? 0} of ${usage?.monthly_audits_limit ?? 0} monthly audits remaining`}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {usage?.plan_tier === 'free'
+                ? 'Get three free audits with no credit card required.'
+                : `${usage?.monthly_audits_used ?? 0} audits used this month on your ${usage?.plan_tier} plan.`}
+            </p>
+          </div>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/billing">{usage?.plan_tier === 'free' ? 'View plans' : 'Manage plan'}</Link>
+          </Button>
+        </CardContent>
+      </Card>
+
+      {usage?.can_invite_team ? (
+      <Card className="mb-8">
+        <CardHeader className="flex flex-row items-center justify-between gap-4 pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium">
+            <UsersRound className="h-4 w-4" /> Team workspace
+          </CardTitle>
+          <Button onClick={handleCreateInvite} disabled={creatingInvite} size="sm" variant="outline">
+            <UsersRound className="mr-2 h-4 w-4" />
+            {creatingInvite ? 'Creating…' : 'Create invite'}
+          </Button>
+        </CardHeader>
+        <Separator />
+        <CardContent className="space-y-3 pt-4">
+          <p className="text-sm text-muted-foreground">
+            Members who join this workspace can view its shared contracts and audit results.
+          </p>
+          {inviteCode && (
+            <div className="flex gap-2">
+              <Input aria-label="Team invite code" readOnly value={inviteCode} className="font-mono" />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={handleCopyInvite}
+                title="Copy invite code"
+                aria-label="Copy invite code"
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">Invite codes expire in 7 days and can be used up to 10 times. Only workspace owners can create them.</p>
+        </CardContent>
+      </Card>
+      ) : (
+        <Card className="mb-8 border-dashed">
+          <CardContent className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-4">
+            <div>
+              <p className="text-sm font-medium">
+                {usage?.plan_tier === 'pro' ? 'Team workspace' : 'Team workspace collaboration'}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {usage?.plan_tier === 'pro'
+                  ? 'Only the workspace owner can create team invite codes.'
+                  : 'Share contracts and invite teammates with the Pro plan.'}
+              </p>
+            </div>
+            {usage?.plan_tier !== 'pro' && (
+              <Button asChild size="sm" variant="outline"><Link to="/billing">Explore Pro</Link></Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Upload zone */}
       <Card className="mb-8">
         <CardHeader className="pb-3">
@@ -162,7 +283,14 @@ export default function DashboardPage() {
         </CardHeader>
         <Separator />
         <CardContent className="pt-5">
-          <UploadZone playbooks={playbooks} onUpload={handleUpload} uploading={uploading} />
+          <UploadZone
+            playbooks={playbooks}
+            onUpload={handleUpload}
+            uploading={uploading}
+            canUpload={usage?.can_upload ?? true}
+            canUseCustomPlaybooks={usage?.can_use_custom_playbooks ?? false}
+            onUpgrade={() => navigate('/billing')}
+          />
         </CardContent>
       </Card>
 

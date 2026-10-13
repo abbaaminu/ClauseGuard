@@ -10,7 +10,7 @@ interface AuthContextType {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, organizationName: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, organizationName: string, inviteCode?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -88,11 +88,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: error as Error | null };
   }
 
-  async function signUp(email: string, password: string, organizationName: string) {
+  async function signUp(email: string, password: string, organizationName: string, inviteCode?: string) {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { organization_name: organizationName } },
+      options: {
+        data: {
+          organization_name: organizationName,
+          ...(inviteCode ? { organization_invite_code: inviteCode.trim().toLowerCase() } : {}),
+        },
+      },
     });
     return { error: error as Error | null };
   }

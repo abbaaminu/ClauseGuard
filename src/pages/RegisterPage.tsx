@@ -12,12 +12,16 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const schema = z.object({
   email: z.string().email('Enter a valid email address'),
-  organization_name: z.string().min(2, 'Organization name must be at least 2 characters'),
+  organization_name: z.string().trim(),
+  organization_invite_code: z.string().trim().max(64, 'Invite code is too long'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   confirm_password: z.string(),
 }).refine(d => d.password === d.confirm_password, {
   message: "Passwords don't match",
   path: ['confirm_password'],
+}).refine(d => Boolean(d.organization_invite_code) || d.organization_name.length >= 2, {
+  message: 'Enter at least 2 characters or use an organization invite code',
+  path: ['organization_name'],
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -29,16 +33,24 @@ export default function RegisterPage() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', organization_name: '', password: '', confirm_password: '' },
+    defaultValues: { email: '', organization_name: '', organization_invite_code: '', password: '', confirm_password: '' },
   });
 
   async function onSubmit(values: FormValues) {
     setLoading(true);
     const toastId = toast.loading('Creating your account...');
     try {
-      const { error } = await signUp(values.email, values.password, values.organization_name);
+      const { error } = await signUp(
+        values.email,
+        values.password,
+        values.organization_name,
+        values.organization_invite_code
+      );
       if (error) {
-        toast.error(error.message || 'Registration failed. Please try again.', { id: toastId });
+        const message = values.organization_invite_code && /database error saving new user/i.test(error.message)
+          ? 'This team invite code is invalid, expired, or fully used. Ask your workspace owner for a fresh code.'
+          : error.message || 'Registration failed. Please try again.';
+        toast.error(message, { id: toastId });
         return;
       }
       toast.success('Account created. Check your email to verify it.', { id: toastId });
@@ -90,7 +102,7 @@ export default function RegisterPage() {
 
           <h2 className="text-2xl font-semibold tracking-tight mb-1">Create account</h2>
           <p className="text-sm text-muted-foreground mb-8">
-            Set up your organization's legal workspace.
+            Set up your legal workspace and get 3 free contract audits. No credit card required.
           </p>
 
           <Form {...form}>
@@ -113,9 +125,22 @@ export default function RegisterPage() {
                 name="organization_name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-sm font-medium">Organization name</FormLabel>
+                    <FormLabel className="text-sm font-medium">Organization name for a new workspace</FormLabel>
                     <FormControl>
                       <Input placeholder="Acme Legal Group" className="px-3 h-10" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="organization_invite_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-sm font-medium">Team invite code</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Optional invite code" className="px-3 h-10" autoComplete="off" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -127,24 +152,29 @@ export default function RegisterPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel className="text-sm font-medium">Password</FormLabel>
-                    <FormControl>
-                      <div className="relative">
+                    <div className="relative">
+                      {/* FormControl must wrap the <input> itself: it injects the
+                          id/aria-describedby that link this field to its label and
+                          error message. The toggle stays a sibling of FormControl so
+                          it doesn't swallow those attributes. */}
+                      <FormControl>
                         <Input
                           type={showPass ? 'text' : 'password'}
                           placeholder="Min. 8 characters"
                           className="px-3 h-10 pr-10"
                           {...field}
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowPass(p => !p)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                          tabIndex={-1}
-                        >
-                          {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </FormControl>
+                      </FormControl>
+                      <button
+                        type="button"
+                        onClick={() => setShowPass(p => !p)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        aria-label={showPass ? 'Hide passwords' : 'Show passwords'}
+                        aria-pressed={showPass}
+                      >
+                        {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}

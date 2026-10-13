@@ -82,12 +82,26 @@ type RunAuditDatabase = {
         Update: Record<string, unknown>;
         Relationships: [];
       };
+      profiles: {
+        Row: {
+          id: string;
+          email: string;
+          organization_id: string;
+        };
+        Insert: Record<string, unknown>;
+        Update: Record<string, unknown>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
       complete_contract_audit: {
         Args: { p_contract_id: string; p_results: RunAuditJson; p_risk_score: number };
         Returns: undefined;
+      };
+      claim_contract_audit: {
+        Args: { p_contract_id: string };
+        Returns: RunAuditJson;
       };
     };
     Enums: {
@@ -112,6 +126,13 @@ class AuditInputError extends Error {
   constructor(message: string, readonly status: 413 | 422 = 422) {
     super(message);
     this.name = 'AuditInputError';
+  }
+}
+
+class AuditQuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuditQuotaError';
   }
 }
 
@@ -251,19 +272,20 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const { data: claimedContract, error: processingError } = await adminClient
-      .from('contracts')
-      .update({ status: 'processing' })
-      .eq('id', contractId)
-      .in('status', ['uploaded', 'failed', 'completed'])
-      .select('id')
-      .maybeSingle();
-    if (processingError) throw processingError;
-    if (!claimedContract) {
-      return new Response(
-        JSON.stringify({ error: 'This contract is already being audited' }),
-        { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    const { error: processingError } = await adminClient.rpc('claim_contract_audit', {
+      p_contract_id: contractId,
+    });
+    if (processingError) {
+      if (/AUDIT_QUOTA_EXCEEDED|Custom playbooks are available/i.test(processingError.message)) {
+        throw new AuditQuotaError(processingError.message.replace(/^.*?:\s*/, ''));
+      }
+      if (/already being audited|current state/i.test(processingError.message)) {
+        return new Response(
+          JSON.stringify({ error: 'This contract is already being audited' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      throw processingError;
     }
     contractClaimed = true;
 
@@ -327,7 +349,8 @@ Deno.serve(async (req: Request) => {
       description: r.description,
     }));
 
-    const riskScore = calculateRiskScore(validated);
+    const ruleWeights = new Map(rules.map((rule) => [rule.title, rule.weight]));
+    const riskScore = calculateRiskScore(validated, ruleWeights);
     const { error: completionError } = await adminClient.rpc('complete_contract_audit', {
       p_contract_id: contractId,
       p_results: validated.map(({ category, status, critical_level, contract_snippet, alternative_suggestion, description }) => ({
@@ -341,6 +364,17 @@ Deno.serve(async (req: Request) => {
       p_risk_score: riskScore,
     });
     if (completionError) throw completionError;
+
+    if (usedModel !== 'mock') {
+      await sendCriticalAuditNotification(
+        adminClient,
+        env,
+        contract.organization_id,
+        contract.file_name,
+        riskScore,
+        validated
+      );
+    }
 
     return new Response(
       JSON.stringify({
@@ -368,13 +402,14 @@ Deno.serve(async (req: Request) => {
     }
     return new Response(
       JSON.stringify({
-        error: err instanceof AuditInputError || err instanceof AiProviderError
+        error: err instanceof AuditInputError || err instanceof AuditQuotaError || err instanceof AiProviderError
           ? err.message
           : 'Internal server error',
       }),
       {
         status: err instanceof AuditInputError ? err.status
-          : err instanceof AiProviderError ? err.status
+            : err instanceof AuditQuotaError ? 402
+            : err instanceof AiProviderError ? err.status
           : 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
@@ -450,6 +485,72 @@ async function callGemini(
         ? `Gemini ${model} did not respond within 90 seconds. Try again later.`
         : `Could not reach Gemini ${model} or read its response. Check provider availability and try again.`,
     };
+  }
+}
+
+async function sendCriticalAuditNotification(
+  adminClient: SupabaseClient<RunAuditDatabase>,
+  env: ReturnType<typeof loadEnv>,
+  organizationId: string,
+  fileName: string,
+  riskScore: number,
+  results: Array<{
+    category: string;
+    status: string;
+    critical_level: string;
+  }>
+): Promise<void> {
+  const criticalFindings = results.filter(
+    (result) => result.critical_level === 'high' && result.status !== 'passed'
+  );
+  if (riskScore < 70 && criticalFindings.length === 0) return;
+  if (!env.RESEND_API_KEY || !env.RESEND_FROM_EMAIL) {
+    console.warn('Critical audit notification skipped: configure RESEND_API_KEY and RESEND_FROM_EMAIL.');
+    return;
+  }
+
+  try {
+    const { data: profiles, error: profilesError } = await adminClient
+      .from('profiles')
+      .select('email')
+      .eq('organization_id', organizationId);
+    if (profilesError) throw profilesError;
+    const recipients = [...new Set((profiles ?? []).map((profile) => profile.email).filter(Boolean))];
+    if (recipients.length === 0) {
+      console.warn('Critical audit notification skipped: no organization recipients were found.');
+      return;
+    }
+
+    const findingSummary = criticalFindings.length > 0
+      ? criticalFindings.map((finding) => `- ${finding.category}: ${finding.status}`).join('\n')
+      : 'No individual high-severity findings; the overall risk score crossed the alert threshold.';
+    for (let offset = 0; offset < recipients.length; offset += 50) {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        signal: AbortSignal.timeout(10_000),
+        body: JSON.stringify({
+          from: env.RESEND_FROM_EMAIL,
+          to: recipients.slice(offset, offset + 50),
+          subject: `Critical contract audit: ${fileName}`,
+          text: [
+            `A critical audit completed for ${fileName}.`,
+            `Risk score: ${riskScore}/100 (alert threshold: 70).`,
+            '',
+            'High-severity findings:',
+            findingSummary,
+          ].join('\n'),
+        }),
+      });
+      if (!response.ok) {
+        console.error('Resend rejected the critical audit notification:', response.status, (await response.text()).slice(0, 300));
+      }
+    }
+  } catch (error) {
+    console.error('Could not send critical audit notification:', error);
   }
 }
 
@@ -535,17 +636,21 @@ ${contractText}
 ---
 
 PLAYBOOK RULES:
-${rules.map((r, i) => `${i + 1}. [${r.severity.toUpperCase()}] ${r.title}: ${r.description}`).join('\n')}
+${rules.map((r, i) => `${i + 1}. [${r.severity.toUpperCase()}, weight ${r.weight}/5] ${r.title}: ${r.description}`).join('\n')}
 
 Return the JSON array now.`;
 }
 
-function calculateRiskScore(results: Array<{ status: string; critical_level: string }>): number {
+function calculateRiskScore(
+  results: Array<{ category: string; status: string; critical_level: string }>,
+  ruleWeights: Map<string, number>
+): number {
   const weights = { high: 25, medium: 12, low: 5 };
   let score = 0;
   for (const r of results) {
     if (r.status !== 'passed') {
-      score += weights[r.critical_level as keyof typeof weights] ?? 5;
+      score += (weights[r.critical_level as keyof typeof weights] ?? 5)
+        * (ruleWeights.get(r.category) ?? 1);
     }
   }
   return Math.min(100, score);

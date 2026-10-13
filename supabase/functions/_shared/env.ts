@@ -8,6 +8,8 @@ const EnvSchema = z.object({
   SUPABASE_ANON_KEY: z.string().min(20),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
   GOOGLE_API_KEY: z.string().min(10).optional(),
+  RESEND_API_KEY: z.string().min(10).optional(),
+  RESEND_FROM_EMAIL: z.string().min(3).optional(),
   // Escalation model for the cascade (see schemas.ts). Optional: falls back
   // to the fast model if unset, but should be set in production.
   GOOGLE_API_KEY_ESCALATION: z.string().min(10).optional(),

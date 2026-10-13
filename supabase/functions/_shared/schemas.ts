@@ -8,6 +8,7 @@ export const PlaybookRuleSchema = z.object({
   title: z.string().min(3).max(200),
   description: z.string().min(10).max(2000),
   severity: z.enum(["low", "medium", "high"]),
+  weight: z.number().int().min(1).max(5).default(1),
 });
 export type PlaybookRule = z.infer<typeof PlaybookRuleSchema>;
 export const PlaybookRuleArraySchema = z.array(PlaybookRuleSchema).min(1).max(20);

@@ -10,9 +10,19 @@ interface UploadZoneProps {
   playbooks: Playbook[];
   onUpload: (file: File, playbookId: string | null) => Promise<void>;
   uploading: boolean;
+  canUpload: boolean;
+  canUseCustomPlaybooks: boolean;
+  onUpgrade: () => void;
 }
 
-export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) {
+export function UploadZone({
+  playbooks,
+  onUpload,
+  uploading,
+  canUpload,
+  canUseCustomPlaybooks,
+  onUpgrade,
+}: UploadZoneProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [playbookId, setPlaybookId] = useState<string>('none');
 
@@ -20,13 +30,19 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
     if (accepted.length > 0) setSelectedFile(accepted[0]);
   }, []);
 
+  const accept = {
+    'text/plain': ['.txt'],
+    'application/pdf': ['.pdf'],
+    ...(canUseCustomPlaybooks
+      ? { 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] }
+      : {}),
+  };
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      'text/plain': ['.txt'],
-    },
+    accept,
     maxFiles: 1,
-    disabled: uploading,
+    disabled: uploading || !canUpload,
   });
 
   async function handleUpload() {
@@ -46,11 +62,16 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
           isDragActive
             ? 'border-accent bg-accent/5'
             : 'border-border hover:border-muted-foreground/40 hover:bg-muted/30',
-          uploading && 'opacity-50 cursor-not-allowed'
+          (uploading || !canUpload) && 'opacity-50 cursor-not-allowed'
         )}
       >
         <input {...getInputProps()} />
-        {uploading ? (
+        {!canUpload ? (
+          <div className="flex flex-col items-center gap-3 text-muted-foreground">
+            <FileText className="h-8 w-8" strokeWidth={1} />
+            <p className="text-sm">Your free or monthly audit limit has been reached.</p>
+          </div>
+        ) : uploading ? (
           <div className="flex flex-col items-center gap-3 text-muted-foreground">
             <Loader2 className="h-8 w-8 animate-spin" strokeWidth={1} />
             <p className="text-sm">Processing contract…</p>
@@ -79,13 +100,18 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
               <p className="text-sm">
                 {isDragActive ? 'Drop your contract here' : 'Drag & drop a contract, or click to browse'}
               </p>
-              <p className="text-xs mt-1">Plain-text .txt files only. PDF/DOCX extraction is not available yet.</p>
+              <p className="text-xs mt-1">
+                Supported formats: .txt and .pdf{canUseCustomPlaybooks ? ', and .docx' : ' · DOCX extraction is on Pro'}
+              </p>
             </div>
           </div>
         )}
       </div>
 
       {/* Playbook selector + upload button */}
+      {!canUpload ? (
+        <Button type="button" className="w-full" onClick={onUpgrade}>Upgrade to keep auditing</Button>
+      ) : (
       <div className="flex flex-col md:flex-row gap-3">
         <Select value={playbookId} onValueChange={setPlaybookId} disabled={uploading}>
           <SelectTrigger className="flex-1 h-9 text-sm">
@@ -93,7 +119,7 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">No playbook</SelectItem>
-            {playbooks.map(p => (
+            {playbooks.filter(p => p.is_system || canUseCustomPlaybooks).map(p => (
               <SelectItem key={p.id} value={p.id}>
                 {p.is_system && '⊹ '}{p.name}
               </SelectItem>
@@ -112,6 +138,7 @@ export function UploadZone({ playbooks, onUpload, uploading }: UploadZoneProps) 
           )}
         </Button>
       </div>
+      )}
     </div>
   );
 }

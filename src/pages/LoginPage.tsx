@@ -106,24 +106,29 @@ export default function LoginPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel className="text-sm font-medium">Password</FormLabel>
-                    <FormControl>
-                      <div className="relative">
+                    <div className="relative">
+                      {/* FormControl must wrap the <input> itself: it injects the
+                          id/aria-describedby that link this field to its label and
+                          error message. The toggle stays a sibling of FormControl so
+                          it doesn't swallow those attributes. */}
+                      <FormControl>
                         <Input
                           type={showPass ? 'text' : 'password'}
                           placeholder="••••••••"
                           className="px-3 h-10 pr-10"
                           {...field}
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowPass(p => !p)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                          tabIndex={-1}
-                        >
-                          {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </FormControl>
+                      </FormControl>
+                      <button
+                        type="button"
+                        onClick={() => setShowPass(p => !p)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        aria-label={showPass ? 'Hide password' : 'Show password'}
+                        aria-pressed={showPass}
+                      >
+                        {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
